@@ -17,13 +17,8 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # 【修正箇所】json.loadsを削除し、直接dictとして取得
-        # Secrets側の[gcp_service_account]セクションを辞書として読み込みます
-        creds_info = dict(st.secrets["gcp_service_account"])
-        
-        # 秘密鍵の改行コード（\n）を正しく置換
-        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
-        
+        # 手順1でSecretsを文字列として定義したため、このjson.loadsが正しく動作します
+        creds_info = json.loads(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         return gspread.authorize(creds)
     except Exception as e:
