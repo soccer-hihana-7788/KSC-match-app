@@ -17,18 +17,17 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # SecretsからJSON文字列を直接読み込み、辞書に変換
-        json_str = st.secrets["GCP_JSON"]
-        creds_info = json.loads(json_str)
+        # 1行の文字列としてSecretsから取得し、辞書に復元
+        creds_json = st.secrets["GCP_SERVICE_ACCOUNT"]
+        creds_info = json.loads(creds_json)
         
-        # 秘密鍵の改行を確実に処理
-        if "private_key" in creds_info:
-            creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
-            
+        # 秘密鍵の改行コードを正しく処理
+        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+        
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"認証エラーが発生しました。設定を見直してください。\n詳細: {e}")
+        st.error(f"認証エラー: {e}")
         st.stop()
 
 def load_data():
@@ -50,12 +49,10 @@ def load_data():
     else:
         df = pd.DataFrame(data)
     
-    # 型の整理
     if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'])
     if '日時' in df.columns: 
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # UI用制御列
     df['詳細'] = False
     df['写真(画像)'] = False
     
@@ -81,12 +78,14 @@ def save_list(df):
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
-    u, p = st.text_input("ID"), st.text_input("PASS", type="password")
+    u = st.text_input("ID")
+    p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             st.session_state.authenticated = True
             st.rerun()
-        else: st.error("IDまたはパスワードが違います")
+        else:
+            st.error("IDまたはパスワードが違います")
     st.stop()
 
 # --- 4. セッション管理 ---
@@ -120,29 +119,23 @@ if st.session_state.media_no is not None:
         st.rerun()
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
-    try: ws_media = sh.worksheet("media_storage")
+    try:
+        ws_media = sh.worksheet("media_storage")
     except:
         ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3")
         ws_media.append_row(["match_no", "filename", "base64_data"])
-    
     uploaded_file = st.file_uploader("スマホ写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード実行"):
-        with st.spinner("圧縮中..."):
+        with st.spinner("処理中..."):
             try:
                 img = Image.open(uploaded_file)
                 img = ImageOps.exif_transpose(img).convert("RGB")
-                quality, width = 70, 800
-                while True:
-                    img_temp = img.copy()
-                    img_temp.thumbnail((width, width))
-                    buf = BytesIO()
-                    img_temp.save(buf, format="JPEG", quality=quality, optimize=True)
-                    encoded = base64.b64encode(buf.getvalue()).decode()
-                    if len(encoded) < 40000: break
-                    width -= 100; quality -= 10
-                    if quality < 5 or width < 200: break
+                buf = BytesIO()
+                img.thumbnail((800, 800))
+                img.save(buf, format="JPEG", quality=70)
+                encoded = base64.b64encode(buf.getvalue()).decode()
                 ws_media.append_row([str(no), uploaded_file.name, encoded])
-                st.success("写真を保存しました")
+                st.success("保存しました")
                 st.rerun()
             except Exception as e: st.error(f"エラー: {e}")
     match_photos = [r for r in ws_media.get_all_records() if str(r['match_no']) == str(no)]
@@ -155,7 +148,6 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data'])
                     ws_media.delete_rows(cell.row)
                     st.rerun()
-    else: st.info("写真がありません。")
 
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
@@ -181,13 +173,13 @@ elif st.session_state.selected_no is not None:
                 new_s = [s.strip() for s in sc_input.split(",") if s.strip()] + [""] * 10
                 all_results[rk] = {"score": sc, "scorers": new_s[:10]}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
-                st.success("保存しました")
+                st.success("保存完了")
 
 else:
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
-    with c2: cat_filter = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
+    with c2: cat_filter = st.selectbox("📅 カテゴリー", ["すべて", "U8", "U9", "U10", "U11", "U12"])
     df = st.session_state.df_list.copy()
     if cat_filter != "すべて": df = df[df["カテゴリー"] == cat_filter]
     if search_query: 
@@ -197,10 +189,9 @@ else:
         df, 
         hide_index=True, 
         column_config={
-            "詳細": st.column_config.CheckboxColumn("結果入力", width="small"),
+            "詳細": st.column_config.CheckboxColumn("結果", width="small"),
             "No": st.column_config.NumberColumn(disabled=True, width="small"),
-            "写真(画像)": st.column_config.CheckboxColumn("写真管理", width="small"),
-            "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"], width="small"),
+            "写真(画像)": st.column_config.CheckboxColumn("写真", width="small"),
             "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
         }, 
         use_container_width=True, 
