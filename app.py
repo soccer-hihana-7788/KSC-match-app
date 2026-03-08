@@ -17,20 +17,18 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # Secretsから辞書形式で取得
-        creds_info = dict(st.secrets["gcp_service_account"])
+        # SecretsからJSON文字列を直接読み込み、辞書に変換
+        json_str = st.secrets["GCP_JSON"]
+        creds_info = json.loads(json_str)
         
-        # 【重要】秘密鍵の形式エラー(Incorrect padding等)を回避するための自動修正
+        # 秘密鍵の改行を確実に処理
         if "private_key" in creds_info:
-            # 文字列としての "\n" を実際の改行文字に置換
-            fixed_key = creds_info["private_key"].replace("\\n", "\n")
-            # 重複した改行などを整理
-            creds_info["private_key"] = fixed_key.strip()
-
+            creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+            
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"認証エラーが発生しました。Secretsの設定を確認してください。\nエラー詳細: {e}")
+        st.error(f"認証エラーが発生しました。設定を見直してください。\n詳細: {e}")
         st.stop()
 
 def load_data():
@@ -65,21 +63,15 @@ def load_data():
     return df[[c for c in target_order if c in df.columns]]
 
 def save_list(df):
-    """スプレッドシートへの完全な自動保存"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        
         df_save = df.copy()
         if '日時' in df_save.columns:
             df_save['日時'] = df_save['日時'].apply(lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x))
-        
-        # 制御列を除外して保存
         drop_cols = ["詳細", "写真(画像)"]
         df_save = df_save.drop(columns=[c for c in drop_cols if c in df_save.columns])
-        
-        # 確実に上書きするためにクリアしてから更新
         ws.clear()
         ws.update([df_save.columns.values.tolist()] + df_save.values.tolist())
     except Exception as e:
@@ -104,25 +96,19 @@ if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
 
 def on_data_change():
-    """データエディタの変更を即座に反映して保存"""
     changes = st.session_state["editor"]
-    
-    # 変更があった行の処理
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
         actual_no = st.session_state.df_list.at[actual_index, "No"]
-        
         if edit_values.get("詳細") is True:
             st.session_state.selected_no = int(actual_no)
             return
         if edit_values.get("写真(画像)") is True:
             st.session_state.media_no = int(actual_no)
             return
-            
         for col, val in edit_values.items():
             if col not in ["詳細", "写真(画像)"]:
                 st.session_state.df_list.at[actual_index, col] = val
-    
     save_list(st.session_state.df_list)
 
 # --- 5. メイン画面制御 ---
@@ -132,11 +118,9 @@ if st.session_state.media_no is not None:
     if st.button("← 一覧に戻る"):
         st.session_state.media_no = None
         st.rerun()
-    
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
-    try:
-        ws_media = sh.worksheet("media_storage")
+    try: ws_media = sh.worksheet("media_storage")
     except:
         ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3")
         ws_media.append_row(["match_no", "filename", "base64_data"])
@@ -161,7 +145,6 @@ if st.session_state.media_no is not None:
                 st.success("写真を保存しました")
                 st.rerun()
             except Exception as e: st.error(f"エラー: {e}")
-
     match_photos = [r for r in ws_media.get_all_records() if str(r['match_no']) == str(no)]
     if match_photos:
         cols = st.columns(3)
@@ -180,17 +163,14 @@ elif st.session_state.selected_no is not None:
     if st.button("← 一覧に戻る"):
         st.session_state.selected_no = None
         st.rerun()
-    
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
     except:
         ws_res = sh.add_worksheet(title="results", rows="100", cols="2")
         ws_res.append_row(["key", "data"])
-
     res_raw = ws_res.acell("A2").value
     all_results = json.loads(res_raw) if res_raw else {}
-    
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
         sd = all_results.get(rk, {"score": "", "scorers": [""] * 10})
@@ -208,14 +188,11 @@ else:
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
     with c2: cat_filter = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
-    
     df = st.session_state.df_list.copy()
     if cat_filter != "すべて": df = df[df["カテゴリー"] == cat_filter]
     if search_query: 
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
-    
     st.session_state.current_display_df = df
-    
     st.data_editor(
         df, 
         hide_index=True, 
