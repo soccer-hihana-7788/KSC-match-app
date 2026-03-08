@@ -14,11 +14,10 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # Secretsから文字列としてJSONを取得し、辞書に変換
-        creds_json = st.secrets["GCP_SERVICE_ACCOUNT"]
-        creds_info = json.loads(creds_json)
+        # 【重要】Secretsから辞書として取得し、明示的にdict型に変換（AttrDictエラー対策）
+        creds_info = dict(st.secrets["gcp_service_account"])
         
-        # 秘密鍵の中にあるエスケープされた改行コードを正しく処理
+        # 秘密鍵の改行コードを正しく処理
         creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
         
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
@@ -27,16 +26,12 @@ def get_gspread_client():
         st.error(f"認証エラー: {e}")
         st.stop()
 
-# --- 以降、添付された app.py と同じロジック ---
+# --- 以降、添付いただいたファイル通りのメインロジック ---
 def load_data():
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
     ws_list = sh.get_worksheet(0)
-    
-    try:
-        data = ws_list.get_all_records()
-    except Exception:
-        data = []
+    data = ws_list.get_all_records()
     
     if not data:
         df = pd.DataFrame({
@@ -53,15 +48,12 @@ def load_data():
     
     df['詳細'] = False
     df['写真(画像)'] = False
-    
-    target_order = ['詳細', 'No', 'カテゴリー', '日時', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
-    return df[[c for c in target_order if c in df.columns]]
+    return df
 
-# セッション状態の初期化
+# 認証管理
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# ログインチェック
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u = st.text_input("ID")
@@ -74,10 +66,9 @@ if not st.session_state.authenticated:
             st.error("IDまたはパスワードが違います")
     st.stop()
 
-# メイン処理
+# メイン画面表示
 if 'df_list' not in st.session_state:
     st.session_state.df_list = load_data()
 
 st.title("⚽ KSC試合管理一覧")
-st.write("以前動いていた設定に戻しました。")
 st.data_editor(st.session_state.df_list, use_container_width=True, hide_index=True)
