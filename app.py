@@ -17,14 +17,26 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # 1行の文字列としてSecretsから取得し、辞書に復元
-        creds_json = st.secrets["GCP_SERVICE_ACCOUNT"]
-        creds_info = json.loads(creds_json)
+        # 【復旧】最も標準的な読み込み方法に戻します
+        creds_info = st.secrets["gcp_service_account"]
+        # 秘密鍵の改行文字だけを正しく置換
+        key = creds_info["private_key"].replace("\\n", "\n")
         
-        # 秘密鍵の改行コードを正しく処理
-        creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+        # 認証情報の組み立て
+        auth_dict = {
+            "type": creds_info["type"],
+            "project_id": creds_info["project_id"],
+            "private_key_id": creds_info["private_key_id"],
+            "private_key": key,
+            "client_email": creds_info["client_email"],
+            "client_id": creds_info["client_id"],
+            "auth_uri": creds_info["auth_uri"],
+            "token_uri": creds_info["token_uri"],
+            "auth_provider_x509_cert_url": creds_info["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": creds_info["client_x509_cert_url"]
+        }
         
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(auth_dict, scope)
         return gspread.authorize(creds)
     except Exception as e:
         st.error(f"認証エラー: {e}")
