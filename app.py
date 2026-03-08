@@ -17,12 +17,20 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # --- 修正箇所：Secretsを辞書として取得し、そのまま認証に渡す ---
+        # Secretsから辞書形式で取得
         creds_info = dict(st.secrets["gcp_service_account"])
+        
+        # 【重要】秘密鍵の形式エラー(Incorrect padding等)を回避するための自動修正
+        if "private_key" in creds_info:
+            # 文字列としての "\n" を実際の改行文字に置換
+            fixed_key = creds_info["private_key"].replace("\\n", "\n")
+            # 重複した改行などを整理
+            creds_info["private_key"] = fixed_key.strip()
+
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"認証エラー: {e}")
+        st.error(f"認証エラーが発生しました。Secretsの設定を確認してください。\nエラー詳細: {e}")
         st.stop()
 
 def load_data():
@@ -101,11 +109,9 @@ def on_data_change():
     
     # 変更があった行の処理
     for row_idx, edit_values in changes["edited_rows"].items():
-        # フィルター後の表示インデックスから、元のデータの正しい行を特定
         actual_index = st.session_state.current_display_df.index[row_idx]
         actual_no = st.session_state.df_list.at[actual_index, "No"]
         
-        # 画面遷移フラグのチェック
         if edit_values.get("詳細") is True:
             st.session_state.selected_no = int(actual_no)
             return
@@ -113,12 +119,10 @@ def on_data_change():
             st.session_state.media_no = int(actual_no)
             return
             
-        # 値の反映
         for col, val in edit_values.items():
             if col not in ["詳細", "写真(画像)"]:
                 st.session_state.df_list.at[actual_index, col] = val
     
-    # 反映が終わったら即座にスプレッドシートへ保存
     save_list(st.session_state.df_list)
 
 # --- 5. メイン画面制御 ---
@@ -210,7 +214,6 @@ else:
     if search_query: 
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # フィルター適用後のDFを保持（index管理のため）
     st.session_state.current_display_df = df
     
     st.data_editor(
