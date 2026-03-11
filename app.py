@@ -37,8 +37,7 @@ def load_data():
         data = []
     if not data:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
-        df["No"] = range(1, 101)
-        df["カテゴリー"] = "U12"; df["日時"] = date.today().isoformat(); df["競技分類"] = "サッカー"
+        df["No"] = range(1, 101); df["カテゴリー"] = "U12"; df["日時"] = date.today().isoformat(); df["競技分類"] = "サッカー"
         df = df.fillna("")
     else:
         df = pd.DataFrame(data)
@@ -107,6 +106,8 @@ if not st.session_state.authenticated:
 if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
+# 保存成功状態を管理するsession_state
+if 'last_saved_key' not in st.session_state: st.session_state.last_saved_key = None
 
 def on_data_change():
     changes = st.session_state["editor"]
@@ -163,9 +164,6 @@ elif st.session_state.selected_no is not None:
     
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
-        # 画面移動対策: 各試合にアンカー用のHTML IDを設置
-        st.markdown(f'<div id="game_{i}"></div>', unsafe_allow_html=True)
-        
         sd = all_results.get(rk, {"score": " - ", "scorers": [""] * 10, "result": ""})
         parts = sd["score"].split("-")
         s_left = parts[0].strip() if len(parts) > 0 else ""
@@ -173,12 +171,11 @@ elif st.session_state.selected_no is not None:
         display_score = f"{s_left}-{s_right}" if (s_left or s_right) else "未入力"
         result_label = f" 【{sd.get('result', '')}】" if sd.get('result') else ""
         
-        # アンカーに飛ばすための処理を含めたフォーム
         with st.expander(f"第 {i} 試合　　{display_score}{result_label}"):
-            with st.form(key=f"form_{rk}"):
+            with st.form(key=f"form_{rk}", clear_on_submit=False):
                 res_options = ["勝ち", "負け", "引き分け"]
-                current_result = sd.get("result", "")
-                def_idx = res_options.index(current_result) if current_result in res_options else 0
+                cur_res = sd.get("result", "")
+                def_idx = res_options.index(cur_res) if cur_res in res_options else 0
                 res_val = st.radio("結果", res_options, index=def_idx, horizontal=True)
                 st.write("スコア入力")
                 sc_col1, sc_col2, sc_col3 = st.columns([2, 1, 2])
@@ -188,14 +185,18 @@ elif st.session_state.selected_no is not None:
                 sc_input = st.text_area("得点者 (カンマ区切り)", value=", ".join([s for s in sd["scorers"] if s]))
                 
                 if st.form_submit_button("保存"):
+                    # 保存処理を実行（リロードは行わない）
                     combined_score = f"{new_left}-{new_right}"
                     new_s_list = [s.strip() for s in sc_input.split(",") if s.strip()] + [""] * 10
                     all_results[rk] = {"score": combined_score, "scorers": new_s_list[:10], "result": res_val}
                     ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
-                    # 保存後、同じページ内のアンカー(#game_i)にリダイレクトして位置を固定
-                    st.markdown(f'<script>window.location.hash = "game_{i}";</script>', unsafe_allow_html=True)
-                    st.success(f"第 {i} 試合を保存しました")
-                    st.rerun()
+                    # 保存したフラグを立てる（再描画時に反映される）
+                    st.session_state.last_saved_key = rk
+                    st.toast(f"第 {i} 試合を保存しました") # スマホで邪魔にならない通知
+
+            # 保存直後のみメッセージを表示
+            if st.session_state.last_saved_key == rk:
+                st.success("保存完了")
 
 else:
     st.title("⚽ KSC試合管理一覧")
