@@ -45,11 +45,12 @@ def load_data():
         })
     else:
         df = pd.DataFrame(data)
-        # 競技分類列がない場合に備えて初期化
+        # 競技分類列の挿入
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
     
-    if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'])
+    # 型の強制変換（int64エラー対策）
+    if 'No' in df.columns: df['No'] = pd.to_numeric(df['No']).astype(int)
     if '日時' in df.columns: 
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
@@ -59,32 +60,32 @@ def load_data():
     target_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
     return df[[c for c in target_order if c in df.columns]]
 
-# レスポンス向上のため、差分更新（特定行のみ更新）に変更
+# 高速化・エラー対策版更新関数
 def update_row(actual_index, updated_row_series):
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # 保存用の整形
+        # Pythonの標準型に変換（int64回避）
         row_data = updated_row_series.copy()
         if '日時' in row_data:
-            row_data['日時'] = row_data['日時'].isoformat() if hasattr(row_data['日時'], 'isoformat') else str(row_data['日時'])
+            row_data['日時'] = str(row_data['日時'])
         
-        # 不要な表示用列を削除
         drop_cols = ["詳細", "写真(画像)"]
-        row_values = row_data.drop(labels=[c for c in drop_cols if c in row_data.index]).tolist()
+        row_values = row_data.drop(labels=[c for c in drop_cols if c in row_data.index]).values.tolist()
         
-        # スプレッドシートの行番号は インデックス+2 (ヘッダーがあるため)
+        # 確実に標準的なPythonの型にキャスト
+        row_values = [int(v) if isinstance(v, (pd.Int64Dtype, pd.api.types.np_dtype("int64"))) else v for v in row_values]
+        
         ws.update(f"A{actual_index + 2}", [row_values])
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. ログイン保持（Local Storage）制御 ---
+# --- 3. ログイン保持制御 ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# JavaScriptでローカルストレージを確認し、期限内ならURLに?auth=trueを付けてリロード
 auth_check_js = """
 <script>
     const expiry = window.localStorage.getItem('ksc_auth_expiry');
@@ -109,7 +110,6 @@ if not st.session_state.authenticated:
     p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            # 6時間(21600秒)の期限をローカルストレージにセット
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
             set_storage_js = f"""
             <script>
@@ -122,8 +122,7 @@ if not st.session_state.authenticated:
             components.html(set_storage_js, height=0)
             st.session_state.authenticated = True
             st.rerun()
-        else:
-            st.error("IDまたはパスワードが違います")
+        else: st.error("IDまたはパスワードが違います")
     st.stop()
 
 # --- 4. セッション管理 ---
@@ -137,7 +136,6 @@ def on_data_change():
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
         
-        # 遷移フラグのチェック
         if edit_values.get("詳細") is True:
             st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
@@ -145,12 +143,10 @@ def on_data_change():
             st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
         
-        # 値の更新
         for col, val in edit_values.items():
             if col not in ["詳細", "写真(画像)"]:
                 st.session_state.df_list.at[actual_index, col] = val
         
-        # 変更されたその行だけを保存（高速化）
         update_row(actual_index, st.session_state.df_list.iloc[actual_index])
 
 # --- 5. メイン画面制御 ---
@@ -163,8 +159,7 @@ if st.session_state.media_no is not None:
     
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
-    try:
-        ws_media = sh.worksheet("media_storage")
+    try: ws_media = sh.worksheet("media_storage")
     except:
         ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3")
         ws_media.append_row(["match_no", "filename", "base64_data"])
