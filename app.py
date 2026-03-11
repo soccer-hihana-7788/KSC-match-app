@@ -75,18 +75,49 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 認証・セッション管理 ---
-if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+# --- 3. ログイン保持機能 (6時間) ---
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+# JavaScriptによるlocalStorageの確認
+auth_js = """
+<script>
+    const expiry = localStorage.getItem('ksc_auth_expiry');
+    const now = Date.now();
+    if (expiry && now < parseInt(expiry)) {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('auth') !== 'true') {
+            url.searchParams.set('auth', 'true');
+            window.location.href = url.href;
+        }
+    }
+</script>
+"""
+components.html(auth_js, height=0)
+
+if st.query_params.get("auth") == "true":
+    st.session_state.authenticated = True
+
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u, p = st.text_input("ID"), st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
+            # 6時間後のエポックミリ秒を計算
+            expiry_time = int((datetime.now() + timedelta(hours=6)).timestamp() * 1000)
+            set_storage_js = f"""
+            <script>
+                localStorage.setItem('ksc_auth_expiry', '{expiry_time}');
+                window.location.href = window.location.href + '?auth=true';
+            </script>
+            """
+            components.html(set_storage_js, height=0)
             st.session_state.authenticated = True
             st.rerun()
         else: st.error("IDまたはパスワードが違います")
     st.stop()
 
+# --- 4. セッション管理 ---
 if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
@@ -106,9 +137,9 @@ def on_data_change():
                 st.session_state.df_list.at[actual_index, col] = val
         update_row(actual_index, st.session_state.df_list.iloc[actual_index])
 
-# --- 4. 画面制御 ---
+# --- 5. 画面制御 ---
 if st.session_state.media_no is not None:
-    # --- 写真管理画面（抜本的な容量エラー対策を適用） ---
+    # --- 写真管理画面 ---
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -121,24 +152,14 @@ if st.session_state.media_no is not None:
     
     uploaded_file = st.file_uploader("スマホ写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード実行"):
-        with st.spinner("画像を最適化して保存中..."):
+        with st.spinner("画像を最適化中..."):
             try:
-                img = Image.open(uploaded_file)
-                img = ImageOps.exif_transpose(img).convert("RGB")
-                buf = BytesIO()
-                # 抜本的見直し：400pxに縮小し、画質を40に下げることで文字数制限(5万字)を確実に回避
-                img.thumbnail((400, 400)) 
-                img.save(buf, format="JPEG", quality=40, optimize=True)
+                img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
+                buf = BytesIO(); img.thumbnail((400, 400)); img.save(buf, format="JPEG", quality=40, optimize=True)
                 encoded = base64.b64encode(buf.getvalue()).decode()
-                
-                # スプレッドシートの1セル文字数制限チェック
-                if len(encoded) > 50000:
-                    st.error(f"エラー: 画像データが制限を超えています。解像度をさらに下げてください。")
-                else:
-                    ws_media.append_row([str(no), uploaded_file.name, encoded])
-                    st.success("保存しました"); st.rerun()
-            except Exception as e: 
-                st.error(f"アップロードに失敗しました: {e}")
+                if len(encoded) > 50000: st.error("サイズ制限エラー")
+                else: ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
+            except Exception as e: st.error(f"失敗: {e}")
 
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
@@ -167,13 +188,11 @@ elif st.session_state.selected_no is not None:
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
         sd = all_results.get(rk, {"score": " - ", "scorers": [], "result": ""})
-        
         with st.expander(f"第 {i} 試合: {sd.get('score', ' - ')} {sd.get('result', '')}"):
             res_options = ["勝ち", "負け", "引き分け"]
             current_res = sd.get('result', "")
             r_val = st.radio("結果", res_options, key=f"rad_{rk}", horizontal=True, 
                              index=res_options.index(current_res) if current_res in res_options else 0)
-            
             c1, c2 = st.columns(2)
             cur_s = sd.get('score', ' - ')
             s_l = c1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip() if '-' in cur_s else "")
@@ -187,10 +206,10 @@ elif st.session_state.selected_no is not None:
                 new_scorers = [x.strip() for x in t_in.split(",") if x.strip()]
                 all_results[rk] = {"score": f"{s_l}-{s_r}", "result": r_val, "scorers": new_scorers}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
-                st.success(f"第{i}試合 保存完了"); st.rerun()
+                st.success("保存完了"); st.rerun()
 
 else:
-    # --- 一覧画面 ---
+    # --- 一覧画面 (操作性改善) ---
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
