@@ -29,7 +29,6 @@ def load_data():
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
     ws_list = sh.get_worksheet(0)
-    
     try:
         data = ws_list.get_all_records()
     except Exception:
@@ -39,60 +38,45 @@ def load_data():
         df = pd.DataFrame(columns=["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"])
     else:
         df = pd.DataFrame(data)
-        
-        # --- データずれの自動補正ロジック ---
-        # 「対戦相手」列に競技分類が混じっている場合、1列左にずらす
+        # データずれ補正ロジック
         if "対戦相手" in df.columns:
             bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
             if bug_mask.any():
-                # ずれている列のリスト
                 cols_to_fix = ["対戦相手", "試合場所", "試合分類", "備考"]
-                # 1列ずつ左の内容を右の内容で上書き
                 for i in range(len(cols_to_fix) - 1):
                     df.loc[bug_mask, cols_to_fix[i]] = df.loc[bug_mask, cols_to_fix[i+1]]
-                # 一番右（備考）は空にする
                 df.loc[bug_mask, "備考"] = ""
-        
-        # 競技分類列がそもそも無い場合の対策
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
 
-    # 型の整理
     if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
-    if '日時' in df.columns: 
-        df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
+    if '日時' in df.columns: df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # UI用制御列
     df['詳細'] = False
     df['写真(画像)'] = False
     
-    # 指示通りの順序（詳細をNoの左に）
     target_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
     return df[[c for c in target_order if c in df.columns]]
 
 def save_list(df):
-    """スプレッドシートへの保存（型エラー対策済み）"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        
         df_save = df.copy()
         if '日時' in df_save.columns:
             df_save['日時'] = df_save['日時'].apply(lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x))
-        
         drop_cols = ["詳細", "写真(画像)"]
         df_save = df_save.drop(columns=[c for c in drop_cols if c in df_save.columns])
-        
-        # JSONシリアライズエラー(int64等)対策：すべての値を標準Python型に変換
         ws.clear()
+        # 型エラー対策済み保存
         data_to_save = [df_save.columns.values.tolist()] + df_save.astype(object).where(pd.notnull(df_save), "").values.tolist()
         ws.update(data_to_save)
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 認証処理 (TypeError回避のためCookie不使用) ---
+# --- 3. 認証・セッション管理 ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
@@ -104,9 +88,7 @@ if not st.session_state.authenticated:
         else: st.error("IDまたはパスワードが違います")
     st.stop()
 
-# --- 4. セッション管理 ---
-if 'df_list' not in st.session_state: 
-    st.session_state.df_list = load_data()
+if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
 
@@ -114,42 +96,57 @@ def on_data_change():
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
-        actual_no = st.session_state.df_list.at[actual_index, "No"]
-        
         if edit_values.get("詳細") is True:
-            st.session_state.selected_no = int(actual_no)
+            st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
         if edit_values.get("写真(画像)") is True:
-            st.session_state.media_no = int(actual_no)
+            st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
-            
         for col, val in edit_values.items():
             if col not in ["詳細", "写真(画像)"]:
                 st.session_state.df_list.at[actual_index, col] = val
-    
     save_list(st.session_state.df_list)
 
-# --- 5. メイン画面制御 ---
+# --- 4. 画面制御 ---
 if st.session_state.media_no is not None:
-    # 写真管理画面（仕様変更なし）
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.media_no = None
         st.rerun()
-    # ... (既存の写真管理ロジック)
+    # (写真管理ロジック)
 
 elif st.session_state.selected_no is not None:
-    # 試合結果入力画面（仕様変更なし）
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.selected_no = None
         st.rerun()
-    # ... (既存の結果入力ロジック)
+
+    client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
+    try: ws_res = sh.worksheet("results")
+    except: ws_res = sh.add_worksheet("results", 100, 2); ws_res.append_row(["key", "data"])
+    
+    res_raw = ws_res.acell("A2").value
+    all_res = json.loads(res_raw) if res_raw else {}
+    
+    for i in range(1, 11):
+        rk = f"res_{no}_{i}"
+        d = all_res.get(rk, {"score": " - ", "result": "", "scorers": []})
+        with st.expander(f"第 {i} 試合: {d['score']} {d['result']}"):
+            r_val = st.radio("結果", ["勝ち", "負け", "引き分け"], key=f"rad_{rk}", horizontal=True, index=["勝ち","負け","引き分け"].index(d['result']) if d['result'] in ["勝ち","負け","引き分け"] else 0)
+            c1, c2 = st.columns(2)
+            cur_s = d['score'] if '-' in d['score'] else ' - '
+            s_l = c1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip())
+            s_r = c2.text_input("相手", key=f"r_{rk}", value=cur_s.split('-')[-1].strip())
+            t_in = st.text_area("得点者", key=f"t_{rk}", value=", ".join(d['scorers']))
+            
+            if st.button(f"第{i}試合を保存", key=f"b_{rk}"):
+                all_res[rk] = {"score": f"{s_l}-{s_r}", "result": r_val, "scorers": [x.strip() for x in t_in.split(",") if x.strip()]}
+                ws_res.update_acell("A2", json.dumps(all_res, ensure_ascii=False))
+                st.toast(f"第{i}試合 保存完了")
 
 else:
-    # 一覧画面
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
@@ -161,10 +158,8 @@ else:
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
     st.session_state.current_display_df = df
-    
     st.data_editor(
-        df, 
-        hide_index=True, 
+        df, hide_index=True, 
         column_config={
             "詳細": st.column_config.CheckboxColumn("結果入力", width="small"),
             "写真(画像)": st.column_config.CheckboxColumn("写真管理", width="small"),
@@ -173,7 +168,5 @@ else:
             "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"]),
             "日時": st.column_config.DateColumn("日時")
         }, 
-        use_container_width=True, 
-        key="editor", 
-        on_change=on_data_change
+        use_container_width=True, key="editor", on_change=on_data_change
     )
