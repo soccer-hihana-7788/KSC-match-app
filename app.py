@@ -38,11 +38,16 @@ def load_data():
     if not data:
         df = pd.DataFrame({
             "No": range(1, 101), "カテゴリー": ["U12"] * 100,
-            "日時": [date.today().isoformat()] * 100, "対戦相手": [""] * 100,
+            "日時": [date.today().isoformat()] * 100,
+            "競技分類": ["サッカー"] * 100,
+            "対戦相手": [""] * 100,
             "試合場所": [""] * 100, "試合分類": [""] * 100, "備考": [""] * 100
         })
     else:
         df = pd.DataFrame(data)
+        # 競技分類列がない場合に備えて初期化
+        if "競技分類" not in df.columns:
+            df.insert(3, "競技分類", "サッカー")
     
     if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'])
     if '日時' in df.columns: 
@@ -51,72 +56,73 @@ def load_data():
     df['詳細'] = False
     df['写真(画像)'] = False
     
-    target_order = ['詳細', 'No', 'カテゴリー', '日時', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
+    target_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
     return df[[c for c in target_order if c in df.columns]]
 
-def save_list(df):
+# レスポンス向上のため、差分更新（特定行のみ更新）に変更
+def update_row(actual_index, updated_row_series):
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        df_save = df.copy()
-        if '日時' in df_save.columns:
-            df_save['日時'] = df_save['日時'].apply(lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x))
+        # 保存用の整形
+        row_data = updated_row_series.copy()
+        if '日時' in row_data:
+            row_data['日時'] = row_data['日時'].isoformat() if hasattr(row_data['日時'], 'isoformat') else str(row_data['日時'])
         
+        # 不要な表示用列を削除
         drop_cols = ["詳細", "写真(画像)"]
-        df_save = df_save.drop(columns=[c for c in drop_cols if c in df_save.columns])
+        row_values = row_data.drop(labels=[c for c in drop_cols if c in row_data.index]).tolist()
         
-        ws.clear()
-        ws.update([df_save.columns.values.tolist()] + df_save.values.tolist())
+        # スプレッドシートの行番号は インデックス+2 (ヘッダーがあるため)
+        ws.update(f"A{actual_index + 2}", [row_values])
     except Exception as e:
-        st.error(f"自動保存エラー: {e}")
+        st.error(f"保存エラー: {e}")
 
 # --- 3. ログイン保持（Local Storage）制御 ---
-# JavaScriptを使用してブラウザ側に保存
-def set_login_storage():
-    expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-    js = f"""
-        <script>
-            window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
-        </script>
-    """
-    components.html(js, height=0)
-
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# クエリパラメータを利用してJSからの情報を擬似的に受け取る
-query_params = st.query_params
-if not st.session_state.authenticated:
-    # ブラウザのストレージを確認するためのJS
-    check_js = """
-        <script>
-            const expiry = window.localStorage.getItem('ksc_auth_expiry');
-            if (expiry && Number(expiry) > (Date.now() / 1000)) {
-                const url = new URL(window.location.href);
-                if (!url.searchParams.has('auth')) {
-                    url.searchParams.set('auth', 'true');
-                    window.location.href = url.href;
-                }
-            }
-        </script>
-    """
-    components.html(check_js, height=0)
-    
-    if query_params.get("auth") == "true":
-        st.session_state.authenticated = True
-        st.rerun()
+# JavaScriptでローカルストレージを確認し、期限内ならURLに?auth=trueを付けてリロード
+auth_check_js = """
+<script>
+    const expiry = window.localStorage.getItem('ksc_auth_expiry');
+    const now = Date.now() / 1000;
+    if (expiry && Number(expiry) > now) {
+        const url = new URL(window.location.href);
+        if (!url.searchParams.has('auth')) {
+            url.searchParams.set('auth', 'true');
+            window.location.href = url.href;
+        }
+    }
+</script>
+"""
+components.html(auth_check_js, height=0)
+
+if st.query_params.get("auth") == "true":
+    st.session_state.authenticated = True
 
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
-    u, p = st.text_input("ID"), st.text_input("PASS", type="password")
+    u = st.text_input("ID")
+    p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
+            # 6時間(21600秒)の期限をローカルストレージにセット
+            expiry = (datetime.now() + timedelta(hours=6)).timestamp()
+            set_storage_js = f"""
+            <script>
+                window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
+                const url = new URL(window.location.href);
+                url.searchParams.set('auth', 'true');
+                window.location.href = url.href;
+            </script>
+            """
+            components.html(set_storage_js, height=0)
             st.session_state.authenticated = True
-            set_login_storage()
             st.rerun()
-        else: 
+        else:
             st.error("IDまたはパスワードが違います")
     st.stop()
 
@@ -130,20 +136,22 @@ def on_data_change():
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
-        actual_no = st.session_state.df_list.at[actual_index, "No"]
         
+        # 遷移フラグのチェック
         if edit_values.get("詳細") is True:
-            st.session_state.selected_no = int(actual_no)
+            st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
         if edit_values.get("写真(画像)") is True:
-            st.session_state.media_no = int(actual_no)
+            st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
-            
+        
+        # 値の更新
         for col, val in edit_values.items():
             if col not in ["詳細", "写真(画像)"]:
                 st.session_state.df_list.at[actual_index, col] = val
-    
-    save_list(st.session_state.df_list)
+        
+        # 変更されたその行だけを保存（高速化）
+        update_row(actual_index, st.session_state.df_list.iloc[actual_index])
 
 # --- 5. メイン画面制御 ---
 if st.session_state.media_no is not None:
@@ -163,22 +171,16 @@ if st.session_state.media_no is not None:
     
     uploaded_file = st.file_uploader("スマホ写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード実行"):
-        with st.spinner("圧縮中..."):
+        with st.spinner("処理中..."):
             try:
                 img = Image.open(uploaded_file)
                 img = ImageOps.exif_transpose(img).convert("RGB")
-                quality, width = 70, 800
-                while True:
-                    img_temp = img.copy()
-                    img_temp.thumbnail((width, width))
-                    buf = BytesIO()
-                    img_temp.save(buf, format="JPEG", quality=quality, optimize=True)
-                    encoded = base64.b64encode(buf.getvalue()).decode()
-                    if len(encoded) < 40000: break
-                    width -= 100; quality -= 10
-                    if quality < 5 or width < 200: break
+                buf = BytesIO()
+                img.thumbnail((800, 800))
+                img.save(buf, format="JPEG", quality=70)
+                encoded = base64.b64encode(buf.getvalue()).decode()
                 ws_media.append_row([str(no), uploaded_file.name, encoded])
-                st.success("写真を保存しました")
+                st.success("保存しました")
                 st.rerun()
             except Exception as e: st.error(f"エラー: {e}")
 
@@ -192,7 +194,6 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data'])
                     ws_media.delete_rows(cell.row)
                     st.rerun()
-    else: st.info("写真がありません。")
 
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
@@ -241,10 +242,11 @@ else:
         hide_index=True, 
         column_config={
             "詳細": st.column_config.CheckboxColumn("結果入力", width="small"),
-            "No": st.column_config.NumberColumn(disabled=True, width="small"),
             "写真(画像)": st.column_config.CheckboxColumn("写真管理", width="small"),
-            "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"], width="small"),
-            "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
+            "No": st.column_config.NumberColumn(disabled=True, width="small"),
+            "競技分類": st.column_config.SelectboxColumn("競技分類", options=["サッカー", "フットサル"], required=True),
+            "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"]),
+            "日時": st.column_config.DateColumn("日時")
         }, 
         use_container_width=True, 
         key="editor", 
