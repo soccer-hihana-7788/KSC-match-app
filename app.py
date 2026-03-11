@@ -7,7 +7,7 @@ import json
 import base64
 from io import BytesIO
 from PIL import Image, ImageOps
-import time
+import streamlit.components.v1 as components
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
@@ -72,35 +72,49 @@ def save_list(df):
     except Exception as e:
         st.error(f"自動保存エラー: {e}")
 
-# --- 3. ログイン保持（Cookie）制御 ---
-def set_login_cookie():
-    # 6時間後の期限をセット
-    expiry = datetime.now() + timedelta(hours=6)
-    st.context.cookies["ksc_auth_expiry"] = str(expiry.timestamp())
+# --- 3. ログイン保持（Local Storage）制御 ---
+# JavaScriptを使用してブラウザ側に保存
+def set_login_storage():
+    expiry = (datetime.now() + timedelta(hours=6)).timestamp()
+    js = f"""
+        <script>
+            window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
+        </script>
+    """
+    components.html(js, height=0)
 
-def check_login():
-    # 1. Session Stateを確認
-    if st.session_state.get('authenticated'):
-        return True
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+# クエリパラメータを利用してJSからの情報を擬似的に受け取る
+query_params = st.query_params
+if not st.session_state.authenticated:
+    # ブラウザのストレージを確認するためのJS
+    check_js = """
+        <script>
+            const expiry = window.localStorage.getItem('ksc_auth_expiry');
+            if (expiry && Number(expiry) > (Date.now() / 1000)) {
+                const url = new URL(window.location.href);
+                if (!url.searchParams.has('auth')) {
+                    url.searchParams.set('auth', 'true');
+                    window.location.href = url.href;
+                }
+            }
+        </script>
+    """
+    components.html(check_js, height=0)
     
-    # 2. Cookieを確認
-    cookie_expiry = st.context.cookies.get("ksc_auth_expiry")
-    if cookie_expiry:
-        try:
-            if datetime.now().timestamp() < float(cookie_expiry):
-                st.session_state.authenticated = True
-                return True
-        except:
-            pass
-    return False
+    if query_params.get("auth") == "true":
+        st.session_state.authenticated = True
+        st.rerun()
 
-if not check_login():
+if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u, p = st.text_input("ID"), st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             st.session_state.authenticated = True
-            set_login_cookie() # Cookieをセット
+            set_login_storage()
             st.rerun()
         else: 
             st.error("IDまたはパスワードが違います")
