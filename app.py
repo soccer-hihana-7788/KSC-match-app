@@ -108,7 +108,7 @@ def on_data_change():
 
 # --- 4. 画面制御 ---
 if st.session_state.media_no is not None:
-    # --- 写真管理画面（app.pyのアップロード処理を反映） ---
+    # --- 写真管理画面（抜本的な容量エラー対策を適用） ---
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -121,17 +121,24 @@ if st.session_state.media_no is not None:
     
     uploaded_file = st.file_uploader("スマホ写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード実行"):
-        with st.spinner("処理中..."):
+        with st.spinner("画像を最適化して保存中..."):
             try:
                 img = Image.open(uploaded_file)
                 img = ImageOps.exif_transpose(img).convert("RGB")
                 buf = BytesIO()
-                img.thumbnail((800, 800))
-                img.save(buf, format="JPEG", quality=70)
+                # 抜本的見直し：400pxに縮小し、画質を40に下げることで文字数制限(5万字)を確実に回避
+                img.thumbnail((400, 400)) 
+                img.save(buf, format="JPEG", quality=40, optimize=True)
                 encoded = base64.b64encode(buf.getvalue()).decode()
-                ws_media.append_row([str(no), uploaded_file.name, encoded])
-                st.success("保存しました"); st.rerun()
-            except Exception as e: st.error(f"エラー: {e}")
+                
+                # スプレッドシートの1セル文字数制限チェック
+                if len(encoded) > 50000:
+                    st.error(f"エラー: 画像データが制限を超えています。解像度をさらに下げてください。")
+                else:
+                    ws_media.append_row([str(no), uploaded_file.name, encoded])
+                    st.success("保存しました"); st.rerun()
+            except Exception as e: 
+                st.error(f"アップロードに失敗しました: {e}")
 
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
@@ -172,7 +179,6 @@ elif st.session_state.selected_no is not None:
             s_l = c1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip() if '-' in cur_s else "")
             s_r = c2.text_input("相手", key=f"r_{rk}", value=cur_s.split('-')[-1].strip() if '-' in cur_s else "")
             
-            # 得点者の読み込み反映
             current_scorers = sd.get('scorers', [])
             scorers_val = ", ".join([str(s) for s in current_scorers if str(s).strip()])
             t_in = st.text_area("得点者", key=f"t_{rk}", value=scorers_val)
