@@ -219,7 +219,15 @@ elif st.session_state.selected_no is not None:
         result_label = f" 【{sd.get('result', '')}】" if sd.get('result') else ""
         
         with st.expander(f"第 {i} 試合　　{display_score}{result_label}"):
-            res_val = st.radio("結果", ["勝ち", "負け"], index=0 if sd.get("result")=="勝ち" else 1 if sd.get("result")=="負け" else 0, horizontal=True, key=f"r_{rk}")
+            # 「結果」に引き分けを追加
+            res_options = ["勝ち", "負け", "引き分け"]
+            current_result = sd.get("result", "")
+            try:
+                def_idx = res_options.index(current_result)
+            except ValueError:
+                def_idx = 0
+                
+            res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"r_{rk}")
             
             st.write("スコア入力")
             sc_col1, sc_col2, sc_col3 = st.columns([2, 1, 2])
