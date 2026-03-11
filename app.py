@@ -38,7 +38,7 @@ def load_data():
         df = pd.DataFrame(columns=["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"])
     else:
         df = pd.DataFrame(data)
-        # データずれ補正ロジック
+        # データずれ補正
         if "対戦相手" in df.columns:
             bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
             if bug_mask.any():
@@ -69,10 +69,17 @@ def save_list(df):
             df_save['日時'] = df_save['日時'].apply(lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x))
         drop_cols = ["詳細", "写真(画像)"]
         df_save = df_save.drop(columns=[c for c in drop_cols if c in df_save.columns])
+        
+        # エラー対策：全ての要素をPython標準型に変換してから保存
         ws.clear()
-        # 型エラー対策済み保存
-        data_to_save = [df_save.columns.values.tolist()] + df_save.astype(object).where(pd.notnull(df_save), "").values.tolist()
-        ws.update(data_to_save)
+        cleaned_data = df_save.astype(object).where(pd.notnull(df_save), "").values.tolist()
+        # 数値型(int64等)を確実にintへ変換
+        final_data = []
+        for row in cleaned_data:
+            final_data.append([int(x) if isinstance(x, (np.integer, np.int64)) else x for x in row])
+        
+        header = df_save.columns.values.tolist()
+        ws.update([header] + final_data)
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
@@ -114,7 +121,6 @@ if st.session_state.media_no is not None:
     if st.button("← 一覧に戻る"):
         st.session_state.media_no = None
         st.rerun()
-    # (写真管理ロジック)
 
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
@@ -133,16 +139,29 @@ elif st.session_state.selected_no is not None:
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
         d = all_res.get(rk, {"score": " - ", "result": "", "scorers": []})
-        with st.expander(f"第 {i} 試合: {d['score']} {d['result']}"):
-            r_val = st.radio("結果", ["勝ち", "負け", "引き分け"], key=f"rad_{rk}", horizontal=True, index=["勝ち","負け","引き分け"].index(d['result']) if d['result'] in ["勝ち","負け","引き分け"] else 0)
+        
+        # KeyError対策：値が欠落している場合にデフォルト値を設定
+        score_disp = d.get('score', ' - ')
+        result_disp = d.get('result', '')
+        scorers_list = d.get('scorers', [])
+        
+        with st.expander(f"第 {i} 試合: {score_disp} {result_disp}"):
+            res_options = ["勝ち", "負け", "引き分け"]
+            r_val = st.radio("結果", res_options, key=f"rad_{rk}", horizontal=True, 
+                             index=res_options.index(result_disp) if result_disp in res_options else 0)
             c1, c2 = st.columns(2)
-            cur_s = d['score'] if '-' in d['score'] else ' - '
+            cur_s = score_disp if '-' in score_disp else ' - '
             s_l = c1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip())
             s_r = c2.text_input("相手", key=f"r_{rk}", value=cur_s.split('-')[-1].strip())
-            t_in = st.text_area("得点者", key=f"t_{rk}", value=", ".join(d['scorers']))
+            
+            # 得点者の不要なカンマを削除して表示
+            clean_scorers = [str(s).strip() for s in scorers_list if str(s).strip()]
+            t_in = st.text_area("得点者", key=f"t_{rk}", value=", ".join(clean_scorers))
             
             if st.button(f"第{i}試合を保存", key=f"b_{rk}"):
-                all_res[rk] = {"score": f"{s_l}-{s_r}", "result": r_val, "scorers": [x.strip() for x in t_in.split(",") if x.strip()]}
+                # 保存時も空要素を排除
+                new_scorers = [x.strip() for x in t_in.split(",") if x.strip()]
+                all_res[rk] = {"score": f"{s_l}-{s_r}", "result": r_val, "scorers": new_scorers}
                 ws_res.update_acell("A2", json.dumps(all_res, ensure_ascii=False))
                 st.toast(f"第{i}試合 保存完了")
 
