@@ -1,19 +1,21 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import date
+from datetime import date, datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 import base64
 from io import BytesIO
 from PIL import Image, ImageOps
+import streamlit.components.v1 as components
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
 # --- 2. スプレッドシート設定 ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8jh1IeSnu4Afn7a4en7yvLc/edit#gid=0"
+SHEET_COLUMNS = ["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"]
 
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -35,10 +37,9 @@ def load_data():
         data = []
     
     if not data:
-        df = pd.DataFrame(columns=["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"])
+        df = pd.DataFrame(columns=SHEET_COLUMNS)
     else:
         df = pd.DataFrame(data)
-        # データずれ補正
         if "対戦相手" in df.columns:
             bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
             if bug_mask.any():
@@ -46,7 +47,6 @@ def load_data():
                 for i in range(len(cols_to_fix) - 1):
                     df.loc[bug_mask, cols_to_fix[i]] = df.loc[bug_mask, cols_to_fix[i+1]]
                 df.loc[bug_mask, "備考"] = ""
-        
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
@@ -56,31 +56,22 @@ def load_data():
     
     df['詳細'] = False
     df['写真(画像)'] = False
-    
-    target_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
-    return df[[c for c in target_order if c in df.columns]]
+    display_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
+    return df[[c for c in display_order if c in df.columns]]
 
-def save_list(df):
+def update_row(actual_index, updated_row_series):
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        df_save = df.copy()
-        if '日時' in df_save.columns:
-            df_save['日時'] = df_save['日時'].apply(lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x))
-        
-        drop_cols = ["詳細", "写真(画像)"]
-        df_save = df_save.drop(columns=[c for c in drop_cols if c in df_save.columns])
-        
-        ws.clear()
-        # JSONエラー対策: すべての値をPython標準型(int, str等)に変換
-        cleaned_data = df_save.astype(object).where(pd.notnull(df_save), "").values.tolist()
-        final_data = []
-        for row in cleaned_data:
-            final_data.append([int(x) if isinstance(x, (np.integer, np.int64)) else x for x in row])
-        
-        header = df_save.columns.values.tolist()
-        ws.update([header] + final_data)
+        row_values = []
+        for col in SHEET_COLUMNS:
+            val = updated_row_series.get(col, "")
+            if col == "日時" and hasattr(val, 'isoformat'): val = val.isoformat()
+            elif isinstance(val, (np.integer, np.int64)): val = int(val)
+            elif pd.isna(val): val = ""
+            row_values.append(val)
+        ws.update(f"A{actual_index + 2}", [row_values])
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
@@ -113,29 +104,34 @@ def on_data_change():
         for col, val in edit_values.items():
             if col not in ["詳細", "写真(画像)"]:
                 st.session_state.df_list.at[actual_index, col] = val
-    save_list(st.session_state.df_list)
+        update_row(actual_index, st.session_state.df_list.iloc[actual_index])
 
 # --- 4. 画面制御 ---
 if st.session_state.media_no is not None:
-    # --- 写真管理画面 ---
+    # --- 写真管理画面（app.pyのアップロード処理を反映） ---
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.media_no = None
         st.rerun()
-
+    
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_media = sh.worksheet("media_storage")
     except: ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3"); ws_media.append_row(["match_no", "filename", "base64_data"])
-
+    
     uploaded_file = st.file_uploader("スマホ写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード実行"):
         with st.spinner("処理中..."):
-            img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
-            buf = BytesIO(); img.thumbnail((800, 800)); img.save(buf, format="JPEG", quality=70)
-            encoded = base64.b64encode(buf.getvalue()).decode()
-            ws_media.append_row([str(no), uploaded_file.name, encoded])
-            st.success("保存しました")
+            try:
+                img = Image.open(uploaded_file)
+                img = ImageOps.exif_transpose(img).convert("RGB")
+                buf = BytesIO()
+                img.thumbnail((800, 800))
+                img.save(buf, format="JPEG", quality=70)
+                encoded = base64.b64encode(buf.getvalue()).decode()
+                ws_media.append_row([str(no), uploaded_file.name, encoded])
+                st.success("保存しました"); st.rerun()
+            except Exception as e: st.error(f"エラー: {e}")
 
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
@@ -159,34 +155,33 @@ elif st.session_state.selected_no is not None:
     except: ws_res = sh.add_worksheet("results", 100, 2); ws_res.append_row(["key", "data"])
     
     res_raw = ws_res.acell("A2").value
-    all_res = json.loads(res_raw) if res_raw else {}
+    all_results = json.loads(res_raw) if res_raw else {}
     
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
-        # データの安全な取得
-        d = all_res.get(rk, {"score": " - ", "result": "", "scorers": []})
+        sd = all_results.get(rk, {"score": " - ", "scorers": [], "result": ""})
         
-        with st.expander(f"第 {i} 試合: {d.get('score', ' - ')} {d.get('result', '')}"):
+        with st.expander(f"第 {i} 試合: {sd.get('score', ' - ')} {sd.get('result', '')}"):
             res_options = ["勝ち", "負け", "引き分け"]
-            current_res = d.get('result', "")
+            current_res = sd.get('result', "")
             r_val = st.radio("結果", res_options, key=f"rad_{rk}", horizontal=True, 
                              index=res_options.index(current_res) if current_res in res_options else 0)
             
             c1, c2 = st.columns(2)
-            cur_s = d.get('score', ' - ') if '-' in d.get('score', ' - ') else ' - '
-            s_l = c1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip())
-            s_r = c2.text_input("相手", key=f"r_{rk}", value=cur_s.split('-')[-1].strip())
+            cur_s = sd.get('score', ' - ')
+            s_l = c1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip() if '-' in cur_s else "")
+            s_r = c2.text_input("相手", key=f"r_{rk}", value=cur_s.split('-')[-1].strip() if '-' in cur_s else "")
             
-            # 得点者の読み込みと反映
-            current_scorers = d.get('scorers', [])
+            # 得点者の読み込み反映
+            current_scorers = sd.get('scorers', [])
             scorers_val = ", ".join([str(s) for s in current_scorers if str(s).strip()])
             t_in = st.text_area("得点者", key=f"t_{rk}", value=scorers_val)
             
             if st.button(f"第{i}試合を保存", key=f"b_{rk}"):
                 new_scorers = [x.strip() for x in t_in.split(",") if x.strip()]
-                all_res[rk] = {"score": f"{s_l}-{s_r}", "result": r_val, "scorers": new_scorers}
-                ws_res.update_acell("A2", json.dumps(all_res, ensure_ascii=False))
-                st.toast(f"第{i}試合 保存完了")
+                all_results[rk] = {"score": f"{s_l}-{s_r}", "result": r_val, "scorers": new_scorers}
+                ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
+                st.success(f"第{i}試合 保存完了"); st.rerun()
 
 else:
     # --- 一覧画面 ---
