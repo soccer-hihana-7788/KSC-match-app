@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import date, datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -45,7 +46,7 @@ def load_data():
         })
     else:
         df = pd.DataFrame(data)
-        # 競技分類列の挿入
+        # 競技分類列の挿入（日時と対戦相手の間）
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
     
@@ -60,32 +61,41 @@ def load_data():
     target_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
     return df[[c for c in target_order if c in df.columns]]
 
-# 高速化・エラー対策版更新関数
+# 保存エラー修正版（差分更新で高速化）
 def update_row(actual_index, updated_row_series):
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # Pythonの標準型に変換（int64回避）
         row_data = updated_row_series.copy()
         if '日時' in row_data:
             row_data['日時'] = str(row_data['日時'])
         
+        # 不要な表示用列を削除
         drop_cols = ["詳細", "写真(画像)"]
         row_values = row_data.drop(labels=[c for c in drop_cols if c in row_data.index]).values.tolist()
         
-        # 確実に標準的なPythonの型にキャスト
-        row_values = [int(v) if isinstance(v, (pd.Int64Dtype, pd.api.types.np_dtype("int64"))) else v for v in row_values]
+        # 安全な型変換（int64/float64を標準Python型へ）
+        clean_values = []
+        for v in row_values:
+            if isinstance(v, (np.integer, np.floating)):
+                clean_values.append(v.item())
+            elif pd.isna(v):
+                clean_values.append("")
+            else:
+                clean_values.append(v)
         
-        ws.update(f"A{actual_index + 2}", [row_values])
+        # ヘッダーが1行目なので、Index+2行目を更新
+        ws.update(f"A{actual_index + 2}", [clean_values])
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. ログイン保持制御 ---
+# --- 3. ログイン保持制御 (JavaScript LocalStorage利用) ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
+# ブラウザ側の有効期限をチェック
 auth_check_js = """
 <script>
     const expiry = window.localStorage.getItem('ksc_auth_expiry');
@@ -110,6 +120,7 @@ if not st.session_state.authenticated:
     p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
+            # 6時間の期限を設定
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
             set_storage_js = f"""
             <script>
@@ -122,7 +133,8 @@ if not st.session_state.authenticated:
             components.html(set_storage_js, height=0)
             st.session_state.authenticated = True
             st.rerun()
-        else: st.error("IDまたはパスワードが違います")
+        else:
+            st.error("IDまたはパスワードが違います")
     st.stop()
 
 # --- 4. セッション管理 ---
@@ -147,6 +159,7 @@ def on_data_change():
             if col not in ["詳細", "写真(画像)"]:
                 st.session_state.df_list.at[actual_index, col] = val
         
+        # 変更された行のみスプレッドシートへ反映（レスポンス改善）
         update_row(actual_index, st.session_state.df_list.iloc[actual_index])
 
 # --- 5. メイン画面制御 ---
@@ -159,7 +172,8 @@ if st.session_state.media_no is not None:
     
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
-    try: ws_media = sh.worksheet("media_storage")
+    try:
+        ws_media = sh.worksheet("media_storage")
     except:
         ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3")
         ws_media.append_row(["match_no", "filename", "base64_data"])
