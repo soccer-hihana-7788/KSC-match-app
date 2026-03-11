@@ -38,7 +38,7 @@ def load_data():
         df = pd.DataFrame(columns=["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"])
     else:
         df = pd.DataFrame(data)
-        # データずれ補正
+        # データずれ補正（以前のロジックを維持）
         if "対戦相手" in df.columns:
             bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
             if bug_mask.any():
@@ -70,10 +70,8 @@ def save_list(df):
         drop_cols = ["詳細", "写真(画像)"]
         df_save = df_save.drop(columns=[c for c in drop_cols if c in df_save.columns])
         
-        # エラー対策：全ての要素をPython標準型に変換してから保存
         ws.clear()
         cleaned_data = df_save.astype(object).where(pd.notnull(df_save), "").values.tolist()
-        # 数値型(int64等)を確実にintへ変換
         final_data = []
         for row in cleaned_data:
             final_data.append([int(x) if isinstance(x, (np.integer, np.int64)) else x for x in row])
@@ -116,13 +114,37 @@ def on_data_change():
 
 # --- 4. 画面制御 ---
 if st.session_state.media_no is not None:
+    # --- 写真管理画面（復旧） ---
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.media_no = None
         st.rerun()
 
+    client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
+    try: ws_media = sh.worksheet("media_storage")
+    except: ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3"); ws_media.append_row(["match_no", "filename", "base64_data"])
+
+    uploaded_file = st.file_uploader("スマホ写真を選択", type=["png", "jpg", "jpeg"])
+    if uploaded_file and st.button("アップロード実行"):
+        with st.spinner("処理中..."):
+            img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
+            buf = BytesIO(); img.thumbnail((800, 800)); img.save(buf, format="JPEG", quality=70)
+            encoded = base64.b64encode(buf.getvalue()).decode()
+            ws_media.append_row([str(no), uploaded_file.name, encoded])
+            st.success("保存しました")
+
+    match_photos = [r for r in ws_media.get_all_records() if str(r['match_no']) == str(no)]
+    if match_photos:
+        cols = st.columns(3)
+        for idx, item in enumerate(match_photos):
+            with cols[idx % 3]:
+                st.image(base64.b64decode(item['base64_data']), use_container_width=True)
+                if st.button("削除", key=f"del_{idx}"):
+                    cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
+
 elif st.session_state.selected_no is not None:
+    # --- 試合結果入力画面 ---
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -140,32 +162,27 @@ elif st.session_state.selected_no is not None:
         rk = f"res_{no}_{i}"
         d = all_res.get(rk, {"score": " - ", "result": "", "scorers": []})
         
-        # KeyError対策：値が欠落している場合にデフォルト値を設定
-        score_disp = d.get('score', ' - ')
-        result_disp = d.get('result', '')
-        scorers_list = d.get('scorers', [])
-        
-        with st.expander(f"第 {i} 試合: {score_disp} {result_disp}"):
+        with st.expander(f"第 {i} 試合: {d.get('score', ' - ')} {d.get('result', '')}"):
             res_options = ["勝ち", "負け", "引き分け"]
             r_val = st.radio("結果", res_options, key=f"rad_{rk}", horizontal=True, 
-                             index=res_options.index(result_disp) if result_disp in res_options else 0)
+                             index=res_options.index(d['result']) if d['result'] in res_options else 0)
             c1, c2 = st.columns(2)
-            cur_s = score_disp if '-' in score_disp else ' - '
+            cur_s = d.get('score', ' - ') if '-' in d.get('score', ' - ') else ' - '
             s_l = c1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip())
             s_r = c2.text_input("相手", key=f"r_{rk}", value=cur_s.split('-')[-1].strip())
             
-            # 得点者の不要なカンマを削除して表示
-            clean_scorers = [str(s).strip() for s in scorers_list if str(s).strip()]
-            t_in = st.text_area("得点者", key=f"t_{rk}", value=", ".join(clean_scorers))
+            # 得点者の復元：既存データをそのまま表示
+            scorers_val = ", ".join([str(s) for s in d.get('scorers', []) if str(s).strip()])
+            t_in = st.text_area("得点者", key=f"t_{rk}", value=scorers_val)
             
             if st.button(f"第{i}試合を保存", key=f"b_{rk}"):
-                # 保存時も空要素を排除
                 new_scorers = [x.strip() for x in t_in.split(",") if x.strip()]
                 all_res[rk] = {"score": f"{s_l}-{s_r}", "result": r_val, "scorers": new_scorers}
                 ws_res.update_acell("A2", json.dumps(all_res, ensure_ascii=False))
                 st.toast(f"第{i}試合 保存完了")
 
 else:
+    # --- 一覧画面 ---
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
