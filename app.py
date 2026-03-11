@@ -38,7 +38,7 @@ def load_data():
         df = pd.DataFrame(columns=["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"])
     else:
         df = pd.DataFrame(data)
-        # データずれ補正（以前のロジックを維持）
+        # データずれ補正
         if "対戦相手" in df.columns:
             bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
             if bug_mask.any():
@@ -46,6 +46,7 @@ def load_data():
                 for i in range(len(cols_to_fix) - 1):
                     df.loc[bug_mask, cols_to_fix[i]] = df.loc[bug_mask, cols_to_fix[i+1]]
                 df.loc[bug_mask, "備考"] = ""
+        
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
@@ -67,10 +68,12 @@ def save_list(df):
         df_save = df.copy()
         if '日時' in df_save.columns:
             df_save['日時'] = df_save['日時'].apply(lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x))
+        
         drop_cols = ["詳細", "写真(画像)"]
         df_save = df_save.drop(columns=[c for c in drop_cols if c in df_save.columns])
         
         ws.clear()
+        # JSONエラー対策: すべての値をPython標準型(int, str等)に変換
         cleaned_data = df_save.astype(object).where(pd.notnull(df_save), "").values.tolist()
         final_data = []
         for row in cleaned_data:
@@ -114,7 +117,7 @@ def on_data_change():
 
 # --- 4. 画面制御 ---
 if st.session_state.media_no is not None:
-    # --- 写真管理画面（復旧） ---
+    # --- 写真管理画面 ---
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -134,7 +137,7 @@ if st.session_state.media_no is not None:
             ws_media.append_row([str(no), uploaded_file.name, encoded])
             st.success("保存しました")
 
-    match_photos = [r for r in ws_media.get_all_records() if str(r['match_no']) == str(no)]
+    match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
         cols = st.columns(3)
         for idx, item in enumerate(match_photos):
@@ -160,19 +163,23 @@ elif st.session_state.selected_no is not None:
     
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
+        # データの安全な取得
         d = all_res.get(rk, {"score": " - ", "result": "", "scorers": []})
         
         with st.expander(f"第 {i} 試合: {d.get('score', ' - ')} {d.get('result', '')}"):
             res_options = ["勝ち", "負け", "引き分け"]
+            current_res = d.get('result', "")
             r_val = st.radio("結果", res_options, key=f"rad_{rk}", horizontal=True, 
-                             index=res_options.index(d['result']) if d['result'] in res_options else 0)
+                             index=res_options.index(current_res) if current_res in res_options else 0)
+            
             c1, c2 = st.columns(2)
             cur_s = d.get('score', ' - ') if '-' in d.get('score', ' - ') else ' - '
             s_l = c1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip())
             s_r = c2.text_input("相手", key=f"r_{rk}", value=cur_s.split('-')[-1].strip())
             
-            # 得点者の復元：既存データをそのまま表示
-            scorers_val = ", ".join([str(s) for s in d.get('scorers', []) if str(s).strip()])
+            # 得点者の読み込みと反映
+            current_scorers = d.get('scorers', [])
+            scorers_val = ", ".join([str(s) for s in current_scorers if str(s).strip()])
             t_in = st.text_area("得点者", key=f"t_{rk}", value=scorers_val)
             
             if st.button(f"第{i}試合を保存", key=f"b_{rk}"):
