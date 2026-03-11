@@ -41,7 +41,6 @@ def load_data():
     
     if not data:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
-        # 初期データ100行
         df["No"] = range(1, 101)
         df["カテゴリー"] = "U12"
         df["日時"] = date.today().isoformat()
@@ -49,22 +48,38 @@ def load_data():
         df = df.fillna("")
     else:
         df = pd.DataFrame(data)
-        # 競技分類列がない場合の補完
+        
+        # 【ズレ補正処理】
+        # 対戦相手列が「サッカー」または「フットサル」になってしまっている場合、
+        # それを削除して右側のデータを左に1つ寄せる
+        if "対戦相手" in df.columns:
+            bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
+            if bug_mask.any():
+                # ズレている列のリスト（対戦相手〜備考）
+                cols_to_fix = ["対戦相手", "試合場所", "試合分類", "備考"]
+                for i in range(len(cols_to_fix) - 1):
+                    # 現在の列に右隣の列の値を代入
+                    df.loc[bug_mask, cols_to_fix[i]] = df.loc[bug_mask, cols_to_fix[i+1]]
+                # 最後の列（備考）を空にする
+                df.loc[bug_mask, "備考"] = ""
+
+        # 競技分類列がない、あるいは空の場合の補完
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
+        df["競技分類"] = df["競技分類"].replace("", "サッカー")
     
     # 型の整理
     if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
     if '日時' in df.columns: 
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # 表示用制御列の追加
+    # UI用制御列
     df['詳細'] = False
     df['写真(画像)'] = False
     
-    # 表示順の固定（詳細とNoを先頭に、写真を最後に）
+    # 表示順の固定
     display_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
-    return df[display_order]
+    return df[[c for c in display_order if c in df.columns]]
 
 def update_row(actual_index, updated_row_series):
     """特定行のみを正しい列順でスプレッドシートに保存"""
@@ -73,11 +88,9 @@ def update_row(actual_index, updated_row_series):
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # 保存する列（SHEET_COLUMNSの順番）だけを抽出
         row_values = []
         for col in SHEET_COLUMNS:
             val = updated_row_series.get(col, "")
-            # 型変換
             if col == "日時" and hasattr(val, 'isoformat'):
                 val = val.isoformat()
             elif isinstance(val, (np.integer, np.floating)):
@@ -86,7 +99,6 @@ def update_row(actual_index, updated_row_series):
                 val = ""
             row_values.append(val)
         
-        # スプレッドシートの更新（ヘッダーがあるため+2）
         ws.update(f"A{actual_index + 2}", [row_values])
     except Exception as e:
         st.error(f"保存エラー: {e}")
@@ -151,7 +163,6 @@ def on_data_change():
 
 # --- 5. メイン画面制御 ---
 if st.session_state.media_no is not None:
-    # --- 写真管理画面 ---
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -190,7 +201,6 @@ if st.session_state.media_no is not None:
                     ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
-    # --- 試合結果詳細入力画面 ---
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -219,14 +229,9 @@ elif st.session_state.selected_no is not None:
         result_label = f" 【{sd.get('result', '')}】" if sd.get('result') else ""
         
         with st.expander(f"第 {i} 試合　　{display_score}{result_label}"):
-            # 「結果」に引き分けを追加
             res_options = ["勝ち", "負け", "引き分け"]
             current_result = sd.get("result", "")
-            try:
-                def_idx = res_options.index(current_result)
-            except ValueError:
-                def_idx = 0
-                
+            def_idx = res_options.index(current_result) if current_result in res_options else 0
             res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"r_{rk}")
             
             st.write("スコア入力")
@@ -245,7 +250,6 @@ elif st.session_state.selected_no is not None:
                 st.success("保存しました"); st.rerun()
 
 else:
-    # --- メイン一覧画面 ---
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
