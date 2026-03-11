@@ -49,40 +49,30 @@ def load_data():
     else:
         df = pd.DataFrame(data)
         
-        # 【ズレ補正処理】
-        # 対戦相手列が「サッカー」または「フットサル」になってしまっている場合、
-        # それを削除して右側のデータを左に1つ寄せる
+        # ズレ補正処理
         if "対戦相手" in df.columns:
             bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
             if bug_mask.any():
-                # ズレている列のリスト（対戦相手〜備考）
                 cols_to_fix = ["対戦相手", "試合場所", "試合分類", "備考"]
                 for i in range(len(cols_to_fix) - 1):
-                    # 現在の列に右隣の列の値を代入
                     df.loc[bug_mask, cols_to_fix[i]] = df.loc[bug_mask, cols_to_fix[i+1]]
-                # 最後の列（備考）を空にする
                 df.loc[bug_mask, "備考"] = ""
 
-        # 競技分類列がない、あるいは空の場合の補完
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
     
-    # 型の整理
     if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
     if '日時' in df.columns: 
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # UI用制御列
     df['詳細'] = False
     df['写真(画像)'] = False
     
-    # 表示順の固定
     display_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
     return df[[c for c in display_order if c in df.columns]]
 
 def update_row(actual_index, updated_row_series):
-    """特定行のみを正しい列順でスプレッドシートに保存"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
@@ -187,7 +177,7 @@ if st.session_state.media_no is not None:
                 img.save(buf, format="JPEG", quality=70)
                 encoded = base64.b64encode(buf.getvalue()).decode()
                 ws_media.append_row([str(no), uploaded_file.name, encoded])
-                st.success("保存しました"); st.rerun()
+                st.success("保存しました")
             except Exception as e: st.error(f"エラー: {e}")
 
     match_photos = [r for r in ws_media.get_all_records() if str(r['match_no']) == str(no)]
@@ -229,25 +219,29 @@ elif st.session_state.selected_no is not None:
         result_label = f" 【{sd.get('result', '')}】" if sd.get('result') else ""
         
         with st.expander(f"第 {i} 試合　　{display_score}{result_label}"):
-            res_options = ["勝ち", "負け", "引き分け"]
-            current_result = sd.get("result", "")
-            def_idx = res_options.index(current_result) if current_result in res_options else 0
-            res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"r_{rk}")
-            
-            st.write("スコア入力")
-            sc_col1, sc_col2, sc_col3 = st.columns([2, 1, 2])
-            with sc_col1: new_left = st.text_input("自", value=s_left, key=f"sl_{rk}", label_visibility="collapsed")
-            with sc_col2: st.markdown("<h3 style='text-align: center; margin: 0;'>-</h3>", unsafe_allow_html=True)
-            with sc_col3: new_right = st.text_input("相手", value=s_right, key=f"sr_{rk}", label_visibility="collapsed")
-            
-            sc_input = st.text_area("得点者 (カンマ区切り)", value=", ".join([s for s in sd["scorers"] if s]), key=f"p_{rk}")
-            
-            if st.button("保存", key=f"b_{rk}"):
-                combined_score = f"{new_left}-{new_right}"
-                new_s_list = [s.strip() for s in sc_input.split(",") if s.strip()] + [""] * 10
-                all_results[rk] = {"score": combined_score, "scorers": new_s_list[:10], "result": res_val}
-                ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
-                st.success("保存しました"); st.rerun()
+            # 画面移動を防ぐため、各試合をForm化
+            with st.form(key=f"form_{rk}"):
+                res_options = ["勝ち", "負け", "引き分け"]
+                current_result = sd.get("result", "")
+                def_idx = res_options.index(current_result) if current_result in res_options else 0
+                res_val = st.radio("結果", res_options, index=def_idx, horizontal=True)
+                
+                st.write("スコア入力")
+                sc_col1, sc_col2, sc_col3 = st.columns([2, 1, 2])
+                with sc_col1: new_left = st.text_input("自", value=s_left, label_visibility="collapsed")
+                with sc_col2: st.markdown("<h3 style='text-align: center; margin: 0;'>-</h3>", unsafe_allow_html=True)
+                with sc_col3: new_right = st.text_input("相手", value=s_right, label_visibility="collapsed")
+                
+                sc_input = st.text_area("得点者 (カンマ区切り)", value=", ".join([s for s in sd["scorers"] if s]))
+                
+                if st.form_submit_button("保存"):
+                    combined_score = f"{new_left}-{new_right}"
+                    new_s_list = [s.strip() for s in sc_input.split(",") if s.strip()] + [""] * 10
+                    all_results[rk] = {"score": combined_score, "scorers": new_s_list[:10], "result": res_val}
+                    ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
+                    st.success("保存しました")
+                    # rerurnを行わず、状態だけ更新するためにSession State等を利用する手法もありますが、
+                    # Formを使用することで不要なリランによるスクロールリセットを軽減します。
 
 else:
     st.title("⚽ KSC試合管理一覧")
