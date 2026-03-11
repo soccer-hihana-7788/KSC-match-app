@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import date, datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 import base64
 from io import BytesIO
 from PIL import Image, ImageOps
+import time
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
@@ -43,12 +44,10 @@ def load_data():
     else:
         df = pd.DataFrame(data)
     
-    # 型の整理
     if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'])
     if '日時' in df.columns: 
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # UI用制御列
     df['詳細'] = False
     df['写真(画像)'] = False
     
@@ -56,7 +55,6 @@ def load_data():
     return df[[c for c in target_order if c in df.columns]]
 
 def save_list(df):
-    """スプレッドシートへの完全な自動保存"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
@@ -66,26 +64,46 @@ def save_list(df):
         if '日時' in df_save.columns:
             df_save['日時'] = df_save['日時'].apply(lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x))
         
-        # 制御列を除外して保存
         drop_cols = ["詳細", "写真(画像)"]
         df_save = df_save.drop(columns=[c for c in drop_cols if c in df_save.columns])
         
-        # 確実に上書きするためにクリアしてから更新
         ws.clear()
         ws.update([df_save.columns.values.tolist()] + df_save.values.tolist())
     except Exception as e:
         st.error(f"自動保存エラー: {e}")
 
-# --- 3. 認証処理 ---
-if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-if not st.session_state.authenticated:
+# --- 3. ログイン保持（Cookie）制御 ---
+def set_login_cookie():
+    # 6時間後の期限をセット
+    expiry = datetime.now() + timedelta(hours=6)
+    st.context.cookies["ksc_auth_expiry"] = str(expiry.timestamp())
+
+def check_login():
+    # 1. Session Stateを確認
+    if st.session_state.get('authenticated'):
+        return True
+    
+    # 2. Cookieを確認
+    cookie_expiry = st.context.cookies.get("ksc_auth_expiry")
+    if cookie_expiry:
+        try:
+            if datetime.now().timestamp() < float(cookie_expiry):
+                st.session_state.authenticated = True
+                return True
+        except:
+            pass
+    return False
+
+if not check_login():
     st.title("⚽ KSCログイン")
     u, p = st.text_input("ID"), st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             st.session_state.authenticated = True
+            set_login_cookie() # Cookieをセット
             st.rerun()
-        else: st.error("IDまたはパスワードが違います")
+        else: 
+            st.error("IDまたはパスワードが違います")
     st.stop()
 
 # --- 4. セッション管理 ---
@@ -95,16 +113,11 @@ if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
 
 def on_data_change():
-    """データエディタの変更を即座に反映して保存"""
     changes = st.session_state["editor"]
-    
-    # 変更があった行の処理
     for row_idx, edit_values in changes["edited_rows"].items():
-        # フィルター後の表示インデックスから、元のデータの正しい行を特定
         actual_index = st.session_state.current_display_df.index[row_idx]
         actual_no = st.session_state.df_list.at[actual_index, "No"]
         
-        # 画面遷移フラグのチェック
         if edit_values.get("詳細") is True:
             st.session_state.selected_no = int(actual_no)
             return
@@ -112,12 +125,10 @@ def on_data_change():
             st.session_state.media_no = int(actual_no)
             return
             
-        # 値の反映
         for col, val in edit_values.items():
             if col not in ["詳細", "写真(画像)"]:
                 st.session_state.df_list.at[actual_index, col] = val
     
-    # 反映が終わったら即座にスプレッドシートへ保存
     save_list(st.session_state.df_list)
 
 # --- 5. メイン画面制御 ---
@@ -209,7 +220,6 @@ else:
     if search_query: 
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # フィルター適用後のDFを保持（index管理のため）
     st.session_state.current_display_df = df
     
     st.data_editor(
