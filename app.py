@@ -32,15 +32,18 @@ def load_data():
     sh = client.open_by_url(SPREADSHEET_URL)
     ws_list = sh.get_worksheet(0)
     try:
+        # キャッシュを介さず最新を取得
         data = ws_list.get_all_records()
     except Exception:
         data = []
+    
     if not data:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
         df["No"] = range(1, 101); df["カテゴリー"] = "U12"; df["日時"] = date.today().isoformat(); df["競技分類"] = "サッカー"
         df = df.fillna("")
     else:
         df = pd.DataFrame(data)
+        # ズレ補正
         if "対戦相手" in df.columns:
             bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
             if bug_mask.any():
@@ -51,6 +54,7 @@ def load_data():
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
+    
     if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
     if '日時' in df.columns: df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     df['詳細'] = False; df['写真(画像)'] = False
@@ -72,42 +76,22 @@ def update_row(actual_index, updated_row_series):
         ws.update(f"A{actual_index + 2}", [row_values])
     except Exception as e: st.error(f"保存エラー: {e}")
 
-# --- 3. ログイン保持制御 ---
+# --- 3. ログイン・セッション管理 ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-auth_check_js = """
-<script>
-    const expiry = window.localStorage.getItem('ksc_auth_expiry');
-    const now = Date.now() / 1000;
-    if (expiry && Number(expiry) > now) {
-        const url = new URL(window.location.href);
-        if (!url.searchParams.has('auth')) {
-            url.searchParams.set('auth', 'true');
-            window.location.href = url.href;
-        }
-    }
-</script>
-"""
-components.html(auth_check_js, height=0)
-if st.query_params.get("auth") == "true": st.session_state.authenticated = True
+if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
+if 'selected_no' not in st.session_state: st.session_state.selected_no = None
+if 'media_no' not in st.session_state: st.session_state.media_no = None
 
+# ログイン処理
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u, p = st.text_input("ID"), st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-            set_storage_js = f"<script>window.localStorage.setItem('ksc_auth_expiry', '{expiry}'); window.location.href = window.location.href + '?auth=true';</script>"
-            components.html(set_storage_js, height=0)
-            st.session_state.authenticated = True; st.rerun()
+            st.session_state.authenticated = True
+            st.rerun()
         else: st.error("IDまたはパスワードが違います")
     st.stop()
-
-# --- 4. セッション管理 ---
-if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
-if 'selected_no' not in st.session_state: st.session_state.selected_no = None
-if 'media_no' not in st.session_state: st.session_state.media_no = None
-# 保存成功状態を管理するsession_state
-if 'last_saved_key' not in st.session_state: st.session_state.last_saved_key = None
 
 def on_data_change():
     changes = st.session_state["editor"]
@@ -121,7 +105,7 @@ def on_data_change():
             if col not in ["詳細", "写真(画像)"]: st.session_state.df_list.at[actual_index, col] = val
         update_row(actual_index, st.session_state.df_list.iloc[actual_index])
 
-# --- 5. メイン画面制御 ---
+# --- 4. メイン画面制御 ---
 if st.session_state.media_no is not None:
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
@@ -154,11 +138,13 @@ elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; st.rerun()
+    
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
     except:
         ws_res = sh.add_worksheet(title="results", rows="100", cols="2")
         ws_res.append_row(["key", "data"])
+    
     res_raw = ws_res.acell("A2").value
     all_results = json.loads(res_raw) if res_raw else {}
     
@@ -172,40 +158,42 @@ elif st.session_state.selected_no is not None:
         result_label = f" 【{sd.get('result', '')}】" if sd.get('result') else ""
         
         with st.expander(f"第 {i} 試合　　{display_score}{result_label}"):
-            with st.form(key=f"form_{rk}", clear_on_submit=False):
-                res_options = ["勝ち", "負け", "引き分け"]
-                cur_res = sd.get("result", "")
-                def_idx = res_options.index(cur_res) if cur_res in res_options else 0
-                res_val = st.radio("結果", res_options, index=def_idx, horizontal=True)
-                st.write("スコア入力")
-                sc_col1, sc_col2, sc_col3 = st.columns([2, 1, 2])
-                with sc_col1: new_left = st.text_input("自", value=s_left, label_visibility="collapsed")
-                with sc_col2: st.markdown("<h3 style='text-align: center; margin: 0;'>-</h3>", unsafe_allow_html=True)
-                with sc_col3: new_right = st.text_input("相手", value=s_right, label_visibility="collapsed")
-                sc_input = st.text_area("得点者 (カンマ区切り)", value=", ".join([s for s in sd["scorers"] if s]))
+            # st.formを撤廃：リロードを防ぎ画面位置を固定
+            res_options = ["勝ち", "負け", "引き分け"]
+            cur_res = sd.get("result", "")
+            def_idx = res_options.index(cur_res) if cur_res in res_options else 0
+            res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"radio_{rk}")
+            
+            st.write("スコア入力")
+            sc_col1, sc_col2, sc_col3 = st.columns([2, 1, 2])
+            with sc_col1: new_left = st.text_input("自", value=s_left, label_visibility="collapsed", key=f"left_{rk}")
+            with sc_col2: st.markdown("<h3 style='text-align: center; margin: 0;'>-</h3>", unsafe_allow_html=True)
+            with sc_col3: new_right = st.text_input("相手", value=s_right, label_visibility="collapsed", key=f"right_{rk}")
+            sc_input = st.text_area("得点者 (カンマ区切り)", value=", ".join([s for s in sd["scorers"] if s]), key=f"text_{rk}")
+            
+            if st.button("保存", key=f"btn_{rk}"):
+                # 1. 保存用データの作成
+                combined_score = f"{new_left}-{new_right}"
+                new_s_list = [s.strip() for s in sc_input.split(",") if s.strip()] + [""] * 10
+                all_results[rk] = {"score": combined_score, "scorers": new_s_list[:10], "result": res_val}
                 
-                if st.form_submit_button("保存"):
-                    # 保存処理を実行（リロードは行わない）
-                    combined_score = f"{new_left}-{new_right}"
-                    new_s_list = [s.strip() for s in sc_input.split(",") if s.strip()] + [""] * 10
-                    all_results[rk] = {"score": combined_score, "scorers": new_s_list[:10], "result": res_val}
-                    ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
-                    # 保存したフラグを立てる（再描画時に反映される）
-                    st.session_state.last_saved_key = rk
-                    st.toast(f"第 {i} 試合を保存しました") # スマホで邪魔にならない通知
-
-            # 保存直後のみメッセージを表示
-            if st.session_state.last_saved_key == rk:
-                st.success("保存完了")
+                # 2. スプレッドシートへ即時保存
+                ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
+                
+                # 3. 画面をリロードせずに成功を表示（st.rerun()を呼ばない）
+                st.toast(f"第 {i} 試合を保存しました")
+                st.success("保存完了。このまま次を入力できます。")
 
 else:
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
     with c2: cat_filter = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
+    
     df = st.session_state.df_list.copy()
     if cat_filter != "すべて": df = df[df["カテゴリー"] == cat_filter]
     if search_query: df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
+    
     st.session_state.current_display_df = df
     st.data_editor(df, hide_index=True, column_config={
         "詳細": st.column_config.CheckboxColumn("結果入力", width="small"),
