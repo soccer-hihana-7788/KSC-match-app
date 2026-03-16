@@ -217,6 +217,7 @@ else:
     
     st.session_state.current_display_df = df
     
+    # 印刷時に編集用UIを表示させない工夫（最新のdfを表示）
     st.data_editor(
         df, hide_index=True, 
         column_config={
@@ -230,7 +231,14 @@ else:
         use_container_width=True, key="editor", on_change=on_data_change
     )
 
-    # 一覧の最下部にPDF印刷ボタンを設置
     st.markdown("---")
-    if st.button("🖨️ 一覧をPDF印刷・保存"):
-        components.html("<script>window.print();</script>", height=0)
+    # PDF印刷ボタンの動作を改善：最新の表示内容が印刷されるようにJSを最適化
+    if st.button("🖨️ 表示内容をPDF印刷・保存"):
+        components.html("""
+            <script>
+                // 少し遅延させて、最新のレンダリング結果を印刷対象にする
+                setTimeout(function() {
+                    window.print();
+                }, 500);
+            </script>
+        """, height=0)
