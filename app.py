@@ -133,7 +133,6 @@ def on_data_change():
 
 # --- 5. 画面制御 ---
 if st.session_state.media_no is not None:
-    # --- 写真管理画面 ---
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -167,7 +166,6 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
-    # --- 試合結果入力画面 ---
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -204,7 +202,6 @@ elif st.session_state.selected_no is not None:
                 st.success("保存完了"); st.rerun()
 
 else:
-    # --- 一覧画面 ---
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
@@ -231,12 +228,11 @@ else:
     )
 
     st.markdown("---")
-    # PDF印刷機能（抜本的見直し：印刷専用HTMLテーブルの生成）
     if st.button("🖨️ 入力内容を反映してPDF印刷・保存"):
-        # 印刷用のデータフレーム作成（不要な列を除外）
         print_df = df.drop(columns=['詳細', '写真(画像)'])
         html_table = print_df.to_html(index=False, classes='print-table')
         
+        # <h2>内の日時表示を削除
         print_html = f"""
         <html>
         <head>
@@ -251,7 +247,7 @@ else:
             </style>
         </head>
         <body>
-            <h2>KSC試合管理一覧 ({datetime.now().strftime('%Y/%m/%d %H:%M')})</h2>
+            <h2>KSC試合管理一覧</h2>
             {html_table}
             <script>
                 setTimeout(function() {{
