@@ -52,7 +52,9 @@ def load_data():
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
 
     if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
-    if '日時' in df.columns: df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
+    if '日時' in df.columns: 
+        # 日時列を確実にdate型として保持
+        df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
     df['詳細'] = False
     df['写真(画像)'] = False
@@ -79,12 +81,11 @@ def update_row(actual_index, updated_row_series):
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# JavaScriptによるlocalStorageの確認
+# JavaScriptでlocalStorageを読み取り、有効期限内ならクエリパラメータを付与してリロード
 auth_js = """
 <script>
     const expiry = localStorage.getItem('ksc_auth_expiry');
-    const now = Date.now();
-    if (expiry && now < parseInt(expiry)) {
+    if (expiry && Date.now() < parseInt(expiry)) {
         const url = new URL(window.location.href);
         if (url.searchParams.get('auth') !== 'true') {
             url.searchParams.set('auth', 'true');
@@ -103,7 +104,6 @@ if not st.session_state.authenticated:
     u, p = st.text_input("ID"), st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            # 6時間後のエポックミリ秒を計算
             expiry_time = int((datetime.now() + timedelta(hours=6)).timestamp() * 1000)
             set_storage_js = f"""
             <script>
@@ -209,7 +209,7 @@ elif st.session_state.selected_no is not None:
                 st.success("保存完了"); st.rerun()
 
 else:
-    # --- 一覧画面 (操作性改善) ---
+    # --- 一覧画面 ---
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
@@ -229,7 +229,8 @@ else:
             "No": st.column_config.NumberColumn(disabled=True, width="small"),
             "競技分類": st.column_config.SelectboxColumn("競技分類", options=["サッカー", "フットサル"]),
             "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"]),
-            "日時": st.column_config.DateColumn("日時")
+            # 日時列の入力を改善（スマホのカレンダーピッカーを呼び出しやすく設定）
+            "日時": st.column_config.DateColumn("日時", format="YYYY/MM/DD", required=True)
         }, 
         use_container_width=True, key="editor", on_change=on_data_change
     )
