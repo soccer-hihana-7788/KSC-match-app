@@ -217,7 +217,6 @@ else:
     
     st.session_state.current_display_df = df
     
-    # 印刷時に編集用UIを表示させない工夫（最新のdfを表示）
     st.data_editor(
         df, hide_index=True, 
         column_config={
@@ -232,13 +231,34 @@ else:
     )
 
     st.markdown("---")
-    # PDF印刷ボタンの動作を改善：最新の表示内容が印刷されるようにJSを最適化
-    if st.button("🖨️ 表示内容をPDF印刷・保存"):
-        components.html("""
+    # PDF印刷機能（抜本的見直し：印刷専用HTMLテーブルの生成）
+    if st.button("🖨️ 入力内容を反映してPDF印刷・保存"):
+        # 印刷用のデータフレーム作成（不要な列を除外）
+        print_df = df.drop(columns=['詳細', '写真(画像)'])
+        html_table = print_df.to_html(index=False, classes='print-table')
+        
+        print_html = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: sans-serif; }}
+                .print-table {{ border-collapse: collapse; width: 100%; }}
+                .print-table th, .print-table td {{ border: 1px solid black; padding: 8px; text-align: left; }}
+                .print-table th {{ background-color: #f2f2f2; }}
+                @media print {{
+                    .no-print {{ display: none; }}
+                }}
+            </style>
+        </head>
+        <body>
+            <h2>KSC試合管理一覧 ({datetime.now().strftime('%Y/%m/%d %H:%M')})</h2>
+            {html_table}
             <script>
-                // 少し遅延させて、最新のレンダリング結果を印刷対象にする
-                setTimeout(function() {
+                setTimeout(function() {{
                     window.print();
-                }, 500);
+                }}, 500);
             </script>
-        """, height=0)
+        </body>
+        </html>
+        """
+        components.html(print_html, height=0)
