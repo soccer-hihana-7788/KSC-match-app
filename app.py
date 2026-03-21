@@ -76,7 +76,7 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. ログイン保持制御 (6時間) ---
+# --- 3. ログイン保持制御 ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
@@ -152,7 +152,8 @@ if st.session_state.media_no is not None:
                 img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
                 buf = BytesIO(); img.thumbnail((400, 400)); img.save(buf, format="JPEG", quality=40, optimize=True)
                 encoded = base64.b64encode(buf.getvalue()).decode()
-                if len(encoded) > 50000: st.error("サイズ制限エラー")
+                # セル制限チェック
+                if len(encoded) > 50000: st.error("サイズ制限エラー：写真を縮小してください")
                 else: ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
             except Exception as e: st.error(f"失敗: {e}")
 
@@ -183,21 +184,38 @@ elif st.session_state.selected_no is not None:
     
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
+        # KeyError防止：.get() で安全に辞書を取得
         sd = all_results.get(rk, {"score": " - ", "scorers": [""], "result": ""})
-        with st.expander(f"第 {i} 試合: {sd.get('score', ' - ')} {sd.get('result', '')}"):
+        
+        # 安全なスコア分割
+        cur_score = sd.get("score", " - ")
+        parts = cur_score.split("-")
+        s_left = parts[0].strip() if len(parts) > 0 else ""
+        s_right = parts[1].strip() if len(parts) > 1 else ""
+        
+        with st.expander(f"第 {i} 試合: {cur_score} {sd.get('result', '')}"):
             res_options = ["勝ち", "負け", "引き分け"]
             current_result = sd.get("result", "")
             def_idx = res_options.index(current_result) if current_result in res_options else 0
-            res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"r_{rk}")
+            
+            # 重複キー防止：ウィジェットごとに一意のkeyを付与
+            res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"radio_{rk}")
+            
             sc_col1, sc_col2 = st.columns(2)
-            cur_s = sd.get('score', ' - ')
-            s_l = sc_col1.text_input("自", key=f"l_{rk}", value=cur_s.split('-')[0].strip() if '-' in cur_s else "")
-            s_r = sc_col2.text_input("相手", key=f"r_{rk}", value=cur_s.split('-')[-1].strip() if '-' in cur_s else "")
-            current_scorers = sd.get('scorers', [])
-            scorers_val = ", ".join([str(s) for s in current_scorers if str(s).strip()])
-            sc_input = st.text_area("得点者", value=scorers_val, key=f"p_{rk}")
-            if st.button("保存", key=f"b_{rk}"):
-                all_results[rk] = {"score": f"{s_l}-{s_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
+            new_l = sc_col1.text_input("自", value=s_left, key=f"left_{rk}")
+            new_r = sc_col2.text_input("相手", value=s_right, key=f"right_{rk}")
+            
+            # リストから文字列へ安全に変換
+            scorers_list = sd.get("scorers", [])
+            scorers_val = ", ".join([str(s) for s in scorers_list if s])
+            sc_input = st.text_area("得点者", value=scorers_val, key=f"scorer_{rk}")
+            
+            if st.button("保存", key=f"save_{rk}"):
+                all_results[rk] = {
+                    "score": f"{new_l}-{new_r}",
+                    "scorers": [s.strip() for s in sc_input.split(",") if s.strip()],
+                    "result": res_val
+                }
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
                 st.success("保存完了"); st.rerun()
 
@@ -231,30 +249,14 @@ else:
     if st.button("🖨️ 入力内容を反映してPDF印刷・保存"):
         print_df = df.drop(columns=['詳細', '写真(画像)'])
         html_table = print_df.to_html(index=False, classes='print-table')
-        
-        # <h2>内の日時表示を削除
         print_html = f"""
         <html>
-        <head>
-            <style>
-                body {{ font-family: sans-serif; }}
-                .print-table {{ border-collapse: collapse; width: 100%; }}
-                .print-table th, .print-table td {{ border: 1px solid black; padding: 8px; text-align: left; }}
-                .print-table th {{ background-color: #f2f2f2; }}
-                @media print {{
-                    .no-print {{ display: none; }}
-                }}
-            </style>
-        </head>
-        <body>
-            <h2>KSC試合管理一覧</h2>
-            {html_table}
-            <script>
-                setTimeout(function() {{
-                    window.print();
-                }}, 500);
-            </script>
-        </body>
-        </html>
+        <head><style>
+            .print-table {{ border-collapse: collapse; width: 100%; }}
+            .print-table th, .print-table td {{ border: 1px solid black; padding: 8px; text-align: left; }}
+        </style></head>
+        <body><h2 style="text-align: center;">KSC試合管理一覧</h2>{html_table}
+        <script>setTimeout(function() {{ window.print(); }}, 500);</script>
+        </body></html>
         """
         components.html(print_html, height=0)
