@@ -76,49 +76,66 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. ログイン保持制御 (6時間保持) ---
+# --- 3. 抜本的なログイン保持 (localStorage同期) ---
+
+# Session Stateの初期化
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# JavaScriptでlocalStorageを確認し、有効ならURLパラメータを付与してリロード
-auth_js = """
+# JavaScriptによる永続化ストレージの管理
+# ページ読み込み時にlocalStorageを確認し、有効なら auth=true を強制付与してリロード
+auth_persistence_js = """
 <script>
-    const expiry = window.localStorage.getItem('ksc_auth_expiry');
-    const now = Date.now() / 1000;
-    if (expiry && Number(expiry) > now) {
+    const STORAGE_KEY = 'ksc_auth_expiry';
+    const checkAuth = () => {
+        const expiry = window.localStorage.getItem(STORAGE_KEY);
+        const now = Date.now() / 1000;
         const url = new URL(window.location.href);
-        if (!url.searchParams.has('auth')) {
-            url.searchParams.set('auth', 'true');
-            window.location.href = url.href;
+        
+        if (expiry && Number(expiry) > now) {
+            if (url.searchParams.get('auth') !== 'true') {
+                url.searchParams.set('auth', 'true');
+                window.location.replace(url.href);
+            }
+        } else {
+            // 期限切れ、または未ログイン
+            if (url.searchParams.get('auth') === 'true') {
+                window.localStorage.removeItem(STORAGE_KEY);
+                url.searchParams.delete('auth');
+                window.location.replace(url.href);
+            }
         }
-    }
+    };
+    checkAuth();
 </script>
 """
-components.html(auth_js, height=0)
+components.html(auth_persistence_js, height=0)
 
-# URLパラメータがあれば認証済みとする
+# 認証チェック
 if st.query_params.get("auth") == "true":
     st.session_state.authenticated = True
 
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
-    u, p = st.text_input("ID"), st.text_input("PASS", type="password")
+    u = st.text_input("ID")
+    p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            # 6時間後の時間をlocalStorageに保存
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-            login_success_js = f"""
+            # ログイン成功時にlocalStorageへ書き込み、リダイレクト
+            login_js = f"""
             <script>
                 window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
                 const url = new URL(window.location.href);
                 url.searchParams.set('auth', 'true');
-                window.location.href = url.href;
+                window.location.replace(url.href);
             </script>
             """
-            components.html(login_success_js, height=0)
+            components.html(login_js, height=0)
             st.session_state.authenticated = True
             st.rerun()
-        else: st.error("IDまたはパスワードが違います")
+        else:
+            st.error("IDまたはパスワードが違います")
     st.stop()
 
 # --- 4. セッション管理 ---
