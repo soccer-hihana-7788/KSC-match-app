@@ -52,7 +52,6 @@ def load_data():
     df['結果入力'] = False
     df['写真管理'] = False
     
-    # 表示用の列名「対戦場所」に合わせる（KeyError対策）
     if "試合場所" in df.columns:
         df = df.rename(columns={"試合場所": "対戦場所"})
     
@@ -160,10 +159,9 @@ if st.session_state.media_no is not None:
         with st.spinner("画像を圧縮中..."):
             try:
                 img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
-                # 文字数制限回避のための圧縮 (350px/Quality 35)
                 buf = BytesIO(); img.thumbnail((350, 350)); img.save(buf, format="JPEG", quality=35, optimize=True)
                 encoded = base64.b64encode(buf.getvalue()).decode()
-                if len(encoded) > 50000: st.error("サイズ制限エラー：別の写真をお試しください。")
+                if len(encoded) > 50000: st.error("サイズ制限エラー")
                 else: ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
             except Exception as e: st.error(f"失敗: {e}")
 
@@ -192,8 +190,30 @@ elif st.session_state.selected_no is not None:
     res_raw = ws_res.acell("A2").value
     all_results = json.loads(res_raw) if res_raw else {}
     
+    # 抜本的改善：保存後に同じ位置へ戻るためのアンカーJS
+    scroll_js = """
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const anchor = urlParams.get('scroll_to');
+        if (anchor) {
+            setTimeout(() => {
+                const el = window.parent.document.getElementById(anchor);
+                if (el) el.scrollIntoView({behavior: 'smooth'});
+                // パラメータをクリア
+                const newUrl = new URL(window.location.href);
+                newUrl.searchParams.delete('scroll_to');
+                window.history.replaceState({}, '', newUrl);
+            }, 300);
+        }
+    </script>
+    """
+    components.html(scroll_js, height=0)
+
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
+        # アンカーポイントの設置
+        st.markdown(f'<div id="anchor_{rk}"></div>', unsafe_allow_html=True)
+        
         sd = all_results.get(rk, {"score": " - ", "scorers": [""], "result": ""})
         cur_score = sd.get("score", " - ")
         parts = cur_score.split("-")
@@ -204,17 +224,20 @@ elif st.session_state.selected_no is not None:
             res_options = ["勝ち", "負け", "引き分け"]
             current_result = sd.get("result", "")
             def_idx = res_options.index(current_result) if current_result in res_options else 0
-            # 重複キーエラー回避
             res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"rad_btn_{rk}")
             sc_col1, sc_col2 = st.columns(2)
             new_l = sc_col1.text_input("自", value=s_left, key=f"score_l_{rk}")
             new_r = sc_col2.text_input("相手", value=s_right, key=f"score_r_{rk}")
             scorers_val = ", ".join([str(s) for s in sd.get("scorers", []) if s])
             sc_input = st.text_area("得点者", value=scorers_val, key=f"txt_area_{rk}")
+            
             if st.button("保存", key=f"btn_save_{rk}"):
                 all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
-                st.success("保存完了"); st.rerun()
+                st.success("保存完了")
+                # 保存後にアンカー位置を指定してリロード
+                st.query_params["scroll_to"] = f"anchor_{rk}"
+                st.rerun()
 
 else:
     st.title("⚽ KSC試合管理一覧")
@@ -227,10 +250,7 @@ else:
     if search_query: 
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # 指示通りの列順
     display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
-    
-    # KeyError対策：確実に存在する列のみ抽出し指示の順序で表示
     st.session_state.current_display_df = df[[c for c in display_cols if c in df.columns]]
     
     st.data_editor(
