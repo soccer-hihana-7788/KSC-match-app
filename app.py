@@ -77,76 +77,65 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 認証 & スクロール制御スクリプト ---
+# --- 3. 認証ロジック (抜本見直し) ---
+# クエリパラメータから認証状態を確認
+is_auth_param = st.query_params.get("auth") == "true"
+
+if not is_auth_param:
+    # ログイン画面
+    st.title("⚽ KSCログイン")
+    u = st.text_input("ID", key="login_id")
+    p = st.text_input("PASS", type="password", key="login_pass")
+    
+    if st.button("ログイン", key="login_btn"):
+        if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
+            # 認証成功: 有効期限をセットしてリダイレクト
+            expiry = (datetime.now() + timedelta(hours=6)).timestamp()
+            st.query_params["auth"] = "true"
+            # ローカルストレージに保存するための小さなJSを一度だけ実行
+            components.html(f"""
+                <script>
+                    window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
+                    window.parent.location.reload();
+                </script>
+            """, height=0)
+            st.stop()
+        else:
+            st.error("IDまたはパスワードが違います")
+    st.stop()
+
+# --- 4. 認証済みの場合の制御 (スクロール保持JS) ---
 persistence_js = """
 <script>
     const STORAGE_KEY = 'ksc_auth_expiry';
     const SCROLL_KEY = 'ksc_list_scroll_pos';
     
-    // 1. 認証チェック
+    // 期限切れチェック
     const expiry = window.localStorage.getItem(STORAGE_KEY);
     const now = Date.now() / 1000;
-    const url = new URL(window.location.href);
-    
-    if (expiry && Number(expiry) > now) {
-        if (url.searchParams.get('auth') !== 'true') {
-            url.searchParams.set('auth', 'true');
-            window.location.replace(url.href);
-        }
-    } else if (url.searchParams.get('auth') === 'true') {
+    if (!expiry || Number(expiry) < now) {
         window.localStorage.removeItem(STORAGE_KEY);
+        const url = new URL(window.parent.location.href);
         url.searchParams.delete('auth');
-        window.location.replace(url.href);
+        window.parent.location.href = url.href;
     }
 
-    // 2. スクロール位置管理 (認証済みの場合のみ)
-    if (url.searchParams.get('auth') === 'true') {
-        window.parent.addEventListener('scroll', () => {
-            window.sessionStorage.setItem(SCROLL_KEY, window.parent.scrollY);
-        }, true);
+    // スクロール位置管理
+    window.parent.addEventListener('scroll', () => {
+        window.sessionStorage.setItem(SCROLL_KEY, window.parent.scrollY);
+    }, true);
 
-        const savedPos = window.sessionStorage.getItem(SCROLL_KEY);
-        if (savedPos) {
-            setTimeout(() => {
-                window.parent.scrollTo(0, parseInt(savedPos));
-            }, 150);
-        }
+    const savedPos = window.sessionStorage.getItem(SCROLL_KEY);
+    if (savedPos) {
+        setTimeout(() => {
+            window.parent.scrollTo(0, parseInt(savedPos));
+        }, 150);
     }
 </script>
 """
 components.html(persistence_js, height=0)
 
-# 認証状態の判定
-if st.query_params.get("auth") == "true":
-    st.session_state.authenticated = True
-else:
-    st.session_state.authenticated = False
-
-# ログイン画面
-if not st.session_state.authenticated:
-    st.title("⚽ KSCログイン")
-    u = st.text_input("ID")
-    p = st.text_input("PASS", type="password")
-    if st.button("ログイン"):
-        if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-            # ログイン成功時のJS処理
-            login_js = f"""
-            <script>
-                window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
-                const url = new URL(window.parent.location.href);
-                url.searchParams.set('auth', 'true');
-                window.parent.location.href = url.href;
-            </script>
-            """
-            components.html(login_js, height=0)
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("IDまたはパスワードが違います")
-    st.stop()
-
-# --- 4. セッション管理 ---
+# --- 5. セッション & データ処理 ---
 if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
@@ -166,8 +155,9 @@ def on_data_change():
                 st.session_state.df_list.at[actual_index, col] = val
         update_row(actual_index, st.session_state.df_list.iloc[actual_index])
 
-# --- 5. 画面制御 ---
+# --- 6. 画面制御 ---
 if st.session_state.media_no is not None:
+    # (写真管理画面 ... 変更なし)
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -201,6 +191,7 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
+    # (試合結果入力画面 ... 変更なし)
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -240,6 +231,7 @@ elif st.session_state.selected_no is not None:
                 st.success("保存完了"); st.rerun()
 
 else:
+    # (メイン一覧画面 ... 変更なし)
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
