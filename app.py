@@ -77,15 +77,17 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. ログイン保持 & スクロール位置保持 (JS抜本見直し) ---
-# 6時間認証保持 ＋ 一覧画面のスクロール位置を維持するスクリプト
+# --- 3. 認証 & スクロール制御スクリプト ---
 persistence_js = """
 <script>
-    // --- 認証管理 ---
     const STORAGE_KEY = 'ksc_auth_expiry';
+    const SCROLL_KEY = 'ksc_list_scroll_pos';
+    
+    // 1. 認証チェック
     const expiry = window.localStorage.getItem(STORAGE_KEY);
     const now = Date.now() / 1000;
     const url = new URL(window.location.href);
+    
     if (expiry && Number(expiry) > now) {
         if (url.searchParams.get('auth') !== 'true') {
             url.searchParams.set('auth', 'true');
@@ -97,40 +99,51 @@ persistence_js = """
         window.location.replace(url.href);
     }
 
-    // --- スクロール位置管理 ---
-    const SCROLL_KEY = 'ksc_list_scroll_pos';
-    // 常に最新のスクロール位置を監視して保存
-    window.parent.addEventListener('scroll', () => {
-        window.sessionStorage.setItem(SCROLL_KEY, window.parent.scrollY);
-    }, true);
+    // 2. スクロール位置管理 (認証済みの場合のみ)
+    if (url.searchParams.get('auth') === 'true') {
+        window.parent.addEventListener('scroll', () => {
+            window.sessionStorage.setItem(SCROLL_KEY, window.parent.scrollY);
+        }, true);
 
-    // ページ読み込み時に位置を復元
-    const savedPos = window.sessionStorage.getItem(SCROLL_KEY);
-    if (savedPos) {
-        setTimeout(() => {
-            window.parent.scrollTo(0, parseInt(savedPos));
-        }, 100); 
+        const savedPos = window.sessionStorage.getItem(SCROLL_KEY);
+        if (savedPos) {
+            setTimeout(() => {
+                window.parent.scrollTo(0, parseInt(savedPos));
+            }, 150);
+        }
     }
 </script>
 """
 components.html(persistence_js, height=0)
 
+# 認証状態の判定
 if st.query_params.get("auth") == "true":
     st.session_state.authenticated = True
 else:
     st.session_state.authenticated = False
 
+# ログイン画面
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
-    u, p = st.text_input("ID"), st.text_input("PASS", type="password")
+    u = st.text_input("ID")
+    p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-            login_js = f"<script>window.localStorage.setItem('ksc_auth_expiry', '{expiry}'); window.location.replace(window.location.href + (window.location.href.includes('?') ? '&' : '?') + 'auth=true');</script>"
+            # ログイン成功時のJS処理
+            login_js = f"""
+            <script>
+                window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
+                const url = new URL(window.parent.location.href);
+                url.searchParams.set('auth', 'true');
+                window.parent.location.href = url.href;
+            </script>
+            """
             components.html(login_js, height=0)
             st.session_state.authenticated = True
             st.rerun()
-        else: st.error("IDまたはパスワードが違います")
+        else:
+            st.error("IDまたはパスワードが違います")
     st.stop()
 
 # --- 4. セッション管理 ---
@@ -237,11 +250,9 @@ else:
     if search_query: 
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # 指示通りの列順
     display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
     st.session_state.current_display_df = df[[c for c in display_cols if c in df.columns]]
     
-    # data_editor内での変更が即保存される際、JS側でスクロール位置が保持される
     st.data_editor(
         st.session_state.current_display_df, hide_index=True, 
         column_config={
