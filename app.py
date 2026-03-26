@@ -15,7 +15,6 @@ st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
 # --- 2. スプレッドシート設定 ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8jh1IeSnu4Afn7a4en7yvLc/edit#gid=0"
-# 内部管理用の基本カラム定義
 SHEET_COLUMNS = ["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"]
 
 def get_gspread_client():
@@ -41,24 +40,20 @@ def load_data():
         df = pd.DataFrame(columns=SHEET_COLUMNS)
     else:
         df = pd.DataFrame(data)
-        # 競技分類の補完
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
-        # 試合場所カラムの揺れ吸収（エラー回避用）
-        if "対戦場所" in df.columns and "試合場所" not in df.columns:
-            df = df.rename(columns={"対戦場所": "試合場所"})
 
     if 'No' in df.columns: 
         df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
     if '日時' in df.columns: 
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # 指示通りの列名称で追加
+    # 画面表示用の動的列を追加
     df['結果入力'] = False
     df['写真管理'] = False
     
-    # 表示用の列名が「対戦場所」になっているため、表示前に整理
+    # 「試合場所」を「対戦場所」という表示名に変更
     if "試合場所" in df.columns:
         df = df.rename(columns={"試合場所": "対戦場所"})
     
@@ -70,13 +65,13 @@ def update_row(actual_index, updated_row_series):
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         row_values = []
-        # 保存時は元のスプレッドシートのカラム名（試合場所）に戻す
-        data_to_save = updated_row_series.copy()
-        if "対戦場所" in data_to_save:
-            data_to_save["試合場所"] = data_to_save["対戦場所"]
+        # 保存時は元のカラム名に戻す
+        save_data = updated_row_series.copy()
+        if "対戦場所" in save_data:
+            save_data["試合場所"] = save_data["対戦場所"]
 
         for col in SHEET_COLUMNS:
-            val = data_to_save.get(col, "")
+            val = save_data.get(col, "")
             if col == "日時" and hasattr(val, 'isoformat'): val = val.isoformat()
             elif isinstance(val, (np.integer, np.int64)): val = int(val)
             elif pd.isna(val): val = ""
@@ -85,7 +80,7 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. ログイン保持制御 ---
+# --- 3. ログイン保持制御 (6時間) ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
@@ -137,12 +132,15 @@ def on_data_change():
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
+        # 結果入力チェックボックスがONになったら詳細画面へ
         if edit_values.get("結果入力") is True:
             st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
+        # 写真管理チェックボックスがONになったら写真画面へ
         if edit_values.get("写真管理") is True:
             st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
+        # それ以外のデータ変更
         for col, val in edit_values.items():
             if col not in ["結果入力", "写真管理"]:
                 st.session_state.df_list.at[actual_index, col] = val
@@ -167,13 +165,10 @@ if st.session_state.media_no is not None:
         with st.spinner("画像を圧縮中..."):
             try:
                 img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
-                # スプレッドシートの50,000文字制限を回避するため解像度と画質を制限
                 buf = BytesIO(); img.thumbnail((350, 350)); img.save(buf, format="JPEG", quality=35, optimize=True)
                 encoded = base64.b64encode(buf.getvalue()).decode()
-                if len(encoded) > 50000:
-                    st.error("写真が大きすぎます。別の写真を選択してください。")
-                else:
-                    ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
+                if len(encoded) > 50000: st.error("サイズ制限エラー")
+                else: ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
             except Exception as e: st.error(f"失敗: {e}")
 
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
@@ -213,7 +208,6 @@ elif st.session_state.selected_no is not None:
             res_options = ["勝ち", "負け", "引き分け"]
             current_result = sd.get("result", "")
             def_idx = res_options.index(current_result) if current_result in res_options else 0
-            # 重複キーエラー防止のため key をユニークに設定
             res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"rad_btn_{rk}")
             sc_col1, sc_col2 = st.columns(2)
             new_l = sc_col1.text_input("自", value=s_left, key=f"score_l_{rk}")
@@ -236,12 +230,11 @@ else:
     if search_query: 
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # 指示通りの列順（表示用）
+    # 指示通りの列順（左から順に）
     display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
     
-    # KeyErrorを回避：存在する列のみフィルタリングし、指示された順序で表示
-    available_cols = [c for c in display_cols if c in df.columns]
-    st.session_state.current_display_df = df[available_cols]
+    # 内部管理用のNo列は保持しつつ、表示する列だけを指定の順番で抽出
+    st.session_state.current_display_df = df[display_cols]
     
     st.data_editor(
         st.session_state.current_display_df, hide_index=True, 
@@ -257,8 +250,7 @@ else:
 
     st.markdown("---")
     if st.button("🖨️ 入力内容を反映してPDF印刷・保存"):
-        # 印刷対象からチェックボックス列を除外
-        cols_to_print = [c for c in st.session_state.current_display_df.columns if c not in ['結果入力', '写真管理']]
+        cols_to_print = [c for c in display_cols if c not in ['結果入力', '写真管理']]
         print_df = st.session_state.current_display_df[cols_to_print]
         html_table = print_df.to_html(index=False, classes='print-table')
         print_html = f"""
