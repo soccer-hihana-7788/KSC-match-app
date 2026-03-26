@@ -77,35 +77,48 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. ログイン保持制御 (6時間) ---
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-
-auth_persistence_js = """
+# --- 3. ログイン保持 & スクロール位置保持 (JS抜本見直し) ---
+# 6時間認証保持 ＋ 一覧画面のスクロール位置を維持するスクリプト
+persistence_js = """
 <script>
+    // --- 認証管理 ---
     const STORAGE_KEY = 'ksc_auth_expiry';
-    const checkAuth = () => {
-        const expiry = window.localStorage.getItem(STORAGE_KEY);
-        const now = Date.now() / 1000;
-        const url = new URL(window.location.href);
-        if (expiry && Number(expiry) > now) {
-            if (url.searchParams.get('auth') !== 'true') {
-                url.searchParams.set('auth', 'true');
-                window.location.replace(url.href);
-            }
-        } else if (url.searchParams.get('auth') === 'true') {
-            window.localStorage.removeItem(STORAGE_KEY);
-            url.searchParams.delete('auth');
+    const expiry = window.localStorage.getItem(STORAGE_KEY);
+    const now = Date.now() / 1000;
+    const url = new URL(window.location.href);
+    if (expiry && Number(expiry) > now) {
+        if (url.searchParams.get('auth') !== 'true') {
+            url.searchParams.set('auth', 'true');
             window.location.replace(url.href);
         }
-    };
-    checkAuth();
+    } else if (url.searchParams.get('auth') === 'true') {
+        window.localStorage.removeItem(STORAGE_KEY);
+        url.searchParams.delete('auth');
+        window.location.replace(url.href);
+    }
+
+    // --- スクロール位置管理 ---
+    const SCROLL_KEY = 'ksc_list_scroll_pos';
+    // 常に最新のスクロール位置を監視して保存
+    window.parent.addEventListener('scroll', () => {
+        window.sessionStorage.setItem(SCROLL_KEY, window.parent.scrollY);
+    }, true);
+
+    // ページ読み込み時に位置を復元
+    const savedPos = window.sessionStorage.getItem(SCROLL_KEY);
+    if (savedPos) {
+        setTimeout(() => {
+            window.parent.scrollTo(0, parseInt(savedPos));
+        }, 100); 
+    }
 </script>
 """
-components.html(auth_persistence_js, height=0)
+components.html(persistence_js, height=0)
 
 if st.query_params.get("auth") == "true":
     st.session_state.authenticated = True
+else:
+    st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
@@ -190,30 +203,8 @@ elif st.session_state.selected_no is not None:
     res_raw = ws_res.acell("A2").value
     all_results = json.loads(res_raw) if res_raw else {}
     
-    # 抜本的改善：保存後に同じ位置へ戻るためのアンカーJS
-    scroll_js = """
-    <script>
-        const urlParams = new URLSearchParams(window.location.search);
-        const anchor = urlParams.get('scroll_to');
-        if (anchor) {
-            setTimeout(() => {
-                const el = window.parent.document.getElementById(anchor);
-                if (el) el.scrollIntoView({behavior: 'smooth'});
-                // パラメータをクリア
-                const newUrl = new URL(window.location.href);
-                newUrl.searchParams.delete('scroll_to');
-                window.history.replaceState({}, '', newUrl);
-            }, 300);
-        }
-    </script>
-    """
-    components.html(scroll_js, height=0)
-
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
-        # アンカーポイントの設置
-        st.markdown(f'<div id="anchor_{rk}"></div>', unsafe_allow_html=True)
-        
         sd = all_results.get(rk, {"score": " - ", "scorers": [""], "result": ""})
         cur_score = sd.get("score", " - ")
         parts = cur_score.split("-")
@@ -230,14 +221,10 @@ elif st.session_state.selected_no is not None:
             new_r = sc_col2.text_input("相手", value=s_right, key=f"score_r_{rk}")
             scorers_val = ", ".join([str(s) for s in sd.get("scorers", []) if s])
             sc_input = st.text_area("得点者", value=scorers_val, key=f"txt_area_{rk}")
-            
             if st.button("保存", key=f"btn_save_{rk}"):
                 all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
-                st.success("保存完了")
-                # 保存後にアンカー位置を指定してリロード
-                st.query_params["scroll_to"] = f"anchor_{rk}"
-                st.rerun()
+                st.success("保存完了"); st.rerun()
 
 else:
     st.title("⚽ KSC試合管理一覧")
@@ -250,9 +237,11 @@ else:
     if search_query: 
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
+    # 指示通りの列順
     display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
     st.session_state.current_display_df = df[[c for c in display_cols if c in df.columns]]
     
+    # data_editor内での変更が即保存される際、JS側でスクロール位置が保持される
     st.data_editor(
         st.session_state.current_display_df, hide_index=True, 
         column_config={
@@ -267,7 +256,7 @@ else:
 
     st.markdown("---")
     if st.button("🖨️ 入力内容を反映してPDF印刷・保存"):
-        cols_to_print = [c for c in st.session_state.current_display_df.columns if c not in ['結果入力', '写真管理']]
+        cols_to_print = [c for c in display_cols if c not in ['結果入力', '写真管理']]
         print_df = st.session_state.current_display_df[cols_to_print]
         html_table = print_df.to_html(index=False, classes='print-table')
         print_html = f"""
