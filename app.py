@@ -15,6 +15,7 @@ st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
 # --- 2. スプレッドシート設定 ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8jh1IeSnu4Afn7a4en7yvLc/edit#gid=0"
+# 内部管理用の基本カラム定義
 SHEET_COLUMNS = ["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"]
 
 def get_gspread_client():
@@ -40,30 +41,27 @@ def load_data():
         df = pd.DataFrame(columns=SHEET_COLUMNS)
     else:
         df = pd.DataFrame(data)
-        if "対戦相手" in df.columns:
-            bug_mask = df["対戦相手"].isin(["サッカー", "フットサル"])
-            if bug_mask.any():
-                cols_to_fix = ["対戦相手", "試合場所", "試合分類", "備考"]
-                for i in range(len(cols_to_fix) - 1):
-                    df.loc[bug_mask, cols_to_fix[i]] = df.loc[bug_mask, cols_to_fix[i+1]]
-                df.loc[bug_mask, "備考"] = ""
+        # 競技分類の補完
         if "競技分類" not in df.columns:
             df.insert(3, "競技分類", "サッカー")
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
+        # 試合場所カラムの揺れ吸収（エラー回避用）
+        if "対戦場所" in df.columns and "試合場所" not in df.columns:
+            df = df.rename(columns={"対戦場所": "試合場所"})
 
     if 'No' in df.columns: 
         df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
     if '日時' in df.columns: 
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # チェックボックス用の列を追加
+    # 指示通りの列名称で追加
     df['結果入力'] = False
     df['写真管理'] = False
     
-    # 指示通りの列順（Noは含めない）
-    display_order = ['結果入力', '対戦相手', '試合場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+    # 表示用の列名が「対戦場所」になっているため、表示前に整理
+    if "試合場所" in df.columns:
+        df = df.rename(columns={"試合場所": "対戦場所"})
     
-    # 内部管理用にNoは保持するが、表示用DFからは外す制御を後ほど行う
     return df
 
 def update_row(actual_index, updated_row_series):
@@ -72,8 +70,13 @@ def update_row(actual_index, updated_row_series):
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         row_values = []
+        # 保存時は元のスプレッドシートのカラム名（試合場所）に戻す
+        data_to_save = updated_row_series.copy()
+        if "対戦場所" in data_to_save:
+            data_to_save["試合場所"] = data_to_save["対戦場所"]
+
         for col in SHEET_COLUMNS:
-            val = updated_row_series.get(col, "")
+            val = data_to_save.get(col, "")
             if col == "日時" and hasattr(val, 'isoformat'): val = val.isoformat()
             elif isinstance(val, (np.integer, np.int64)): val = int(val)
             elif pd.isna(val): val = ""
@@ -114,24 +117,15 @@ if st.query_params.get("auth") == "true":
 
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
-    u = st.text_input("ID")
-    p = st.text_input("PASS", type="password")
+    u, p = st.text_input("ID"), st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-            login_js = f"""
-            <script>
-                window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
-                const url = new URL(window.location.href);
-                url.searchParams.set('auth', 'true');
-                window.location.replace(url.href);
-            </script>
-            """
+            login_js = f"<script>window.localStorage.setItem('ksc_auth_expiry', '{expiry}'); window.location.replace(window.location.href + (window.location.href.includes('?') ? '&' : '?') + 'auth=true');</script>"
             components.html(login_js, height=0)
             st.session_state.authenticated = True
             st.rerun()
-        else:
-            st.error("IDまたはパスワードが違います")
+        else: st.error("IDまたはパスワードが違います")
     st.stop()
 
 # --- 4. セッション管理 ---
@@ -170,13 +164,16 @@ if st.session_state.media_no is not None:
     
     uploaded_file = st.file_uploader("スマホ写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード実行"):
-        with st.spinner("画像を最適化中..."):
+        with st.spinner("画像を圧縮中..."):
             try:
                 img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
-                buf = BytesIO(); img.thumbnail((400, 400)); img.save(buf, format="JPEG", quality=40, optimize=True)
+                # スプレッドシートの50,000文字制限を回避するため解像度と画質を制限
+                buf = BytesIO(); img.thumbnail((350, 350)); img.save(buf, format="JPEG", quality=35, optimize=True)
                 encoded = base64.b64encode(buf.getvalue()).decode()
-                if len(encoded) > 50000: st.error("サイズ制限エラー")
-                else: ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
+                if len(encoded) > 50000:
+                    st.error("写真が大きすぎます。別の写真を選択してください。")
+                else:
+                    ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
             except Exception as e: st.error(f"失敗: {e}")
 
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
@@ -216,13 +213,14 @@ elif st.session_state.selected_no is not None:
             res_options = ["勝ち", "負け", "引き分け"]
             current_result = sd.get("result", "")
             def_idx = res_options.index(current_result) if current_result in res_options else 0
-            res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"radio_{rk}")
+            # 重複キーエラー防止のため key をユニークに設定
+            res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"rad_btn_{rk}")
             sc_col1, sc_col2 = st.columns(2)
-            new_l = sc_col1.text_input("自", value=s_left, key=f"left_{rk}")
-            new_r = sc_col2.text_input("相手", value=s_right, key=f"right_{rk}")
+            new_l = sc_col1.text_input("自", value=s_left, key=f"score_l_{rk}")
+            new_r = sc_col2.text_input("相手", value=s_right, key=f"score_r_{rk}")
             scorers_val = ", ".join([str(s) for s in sd.get("scorers", []) if s])
-            sc_input = st.text_area("得点者", value=scorers_val, key=f"scorer_{rk}")
-            if st.button("保存", key=f"save_{rk}"):
+            sc_input = st.text_area("得点者", value=scorers_val, key=f"txt_area_{rk}")
+            if st.button("保存", key=f"btn_save_{rk}"):
                 all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
                 st.success("保存完了"); st.rerun()
@@ -239,9 +237,11 @@ else:
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
     # 指示通りの列順（表示用）
-    display_cols = ['結果入力', '対戦相手', '試合場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
-    # 内部管理用のNo列は保持しつつ、表示する列だけを抽出
-    st.session_state.current_display_df = df[display_cols]
+    display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+    
+    # KeyErrorを回避：存在する列のみフィルタリングし、指示された順序で表示
+    available_cols = [c for c in display_cols if c in df.columns]
+    st.session_state.current_display_df = df[available_cols]
     
     st.data_editor(
         st.session_state.current_display_df, hide_index=True, 
@@ -258,7 +258,8 @@ else:
     st.markdown("---")
     if st.button("🖨️ 入力内容を反映してPDF印刷・保存"):
         # 印刷対象からチェックボックス列を除外
-        print_df = st.session_state.current_display_df.drop(columns=['結果入力', '写真管理'])
+        cols_to_print = [c for c in st.session_state.current_display_df.columns if c not in ['結果入力', '写真管理']]
+        print_df = st.session_state.current_display_df[cols_to_print]
         html_table = print_df.to_html(index=False, classes='print-table')
         print_html = f"""
         <html>
