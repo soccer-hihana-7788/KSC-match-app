@@ -51,14 +51,20 @@ def load_data():
             df.insert(3, "競技分類", "サッカー")
         df["競技分類"] = df["競技分類"].replace("", "サッカー")
 
-    if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
+    if 'No' in df.columns: 
+        df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
     if '日時' in df.columns: 
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    df['詳細'] = False
-    df['写真(画像)'] = False
-    display_order = ['詳細', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '試合場所', '試合分類', '備考', '写真(画像)']
-    return df[[c for c in display_order if c in df.columns]]
+    # チェックボックス用の列を追加
+    df['結果入力'] = False
+    df['写真管理'] = False
+    
+    # 指示通りの列順（Noは含めない）
+    display_order = ['結果入力', '対戦相手', '試合場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+    
+    # 内部管理用にNoは保持するが、表示用DFからは外す制御を後ほど行う
+    return df
 
 def update_row(actual_index, updated_row_series):
     try:
@@ -76,14 +82,10 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 抜本的なログイン保持 (localStorage同期) ---
-
-# Session Stateの初期化
+# --- 3. ログイン保持制御 ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# JavaScriptによる永続化ストレージの管理
-# ページ読み込み時にlocalStorageを確認し、有効なら auth=true を強制付与してリロード
 auth_persistence_js = """
 <script>
     const STORAGE_KEY = 'ksc_auth_expiry';
@@ -91,19 +93,15 @@ auth_persistence_js = """
         const expiry = window.localStorage.getItem(STORAGE_KEY);
         const now = Date.now() / 1000;
         const url = new URL(window.location.href);
-        
         if (expiry && Number(expiry) > now) {
             if (url.searchParams.get('auth') !== 'true') {
                 url.searchParams.set('auth', 'true');
                 window.location.replace(url.href);
             }
-        } else {
-            // 期限切れ、または未ログイン
-            if (url.searchParams.get('auth') === 'true') {
-                window.localStorage.removeItem(STORAGE_KEY);
-                url.searchParams.delete('auth');
-                window.location.replace(url.href);
-            }
+        } else if (url.searchParams.get('auth') === 'true') {
+            window.localStorage.removeItem(STORAGE_KEY);
+            url.searchParams.delete('auth');
+            window.location.replace(url.href);
         }
     };
     checkAuth();
@@ -111,7 +109,6 @@ auth_persistence_js = """
 """
 components.html(auth_persistence_js, height=0)
 
-# 認証チェック
 if st.query_params.get("auth") == "true":
     st.session_state.authenticated = True
 
@@ -122,7 +119,6 @@ if not st.session_state.authenticated:
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-            # ログイン成功時にlocalStorageへ書き込み、リダイレクト
             login_js = f"""
             <script>
                 window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
@@ -147,14 +143,14 @@ def on_data_change():
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
-        if edit_values.get("詳細") is True:
+        if edit_values.get("結果入力") is True:
             st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
-        if edit_values.get("写真(画像)") is True:
+        if edit_values.get("写真管理") is True:
             st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
         for col, val in edit_values.items():
-            if col not in ["詳細", "写真(画像)"]:
+            if col not in ["結果入力", "写真管理"]:
                 st.session_state.df_list.at[actual_index, col] = val
         update_row(actual_index, st.session_state.df_list.iloc[actual_index])
 
@@ -221,20 +217,13 @@ elif st.session_state.selected_no is not None:
             current_result = sd.get("result", "")
             def_idx = res_options.index(current_result) if current_result in res_options else 0
             res_val = st.radio("結果", res_options, index=def_idx, horizontal=True, key=f"radio_{rk}")
-            
             sc_col1, sc_col2 = st.columns(2)
             new_l = sc_col1.text_input("自", value=s_left, key=f"left_{rk}")
             new_r = sc_col2.text_input("相手", value=s_right, key=f"right_{rk}")
-            
             scorers_val = ", ".join([str(s) for s in sd.get("scorers", []) if s])
             sc_input = st.text_area("得点者", value=scorers_val, key=f"scorer_{rk}")
-            
             if st.button("保存", key=f"save_{rk}"):
-                all_results[rk] = {
-                    "score": f"{new_l}-{new_r}",
-                    "scorers": [s.strip() for s in sc_input.split(",") if s.strip()],
-                    "result": res_val
-                }
+                all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
                 st.success("保存完了"); st.rerun()
 
@@ -249,14 +238,16 @@ else:
     if search_query: 
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    st.session_state.current_display_df = df
+    # 指示通りの列順（表示用）
+    display_cols = ['結果入力', '対戦相手', '試合場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+    # 内部管理用のNo列は保持しつつ、表示する列だけを抽出
+    st.session_state.current_display_df = df[display_cols]
     
     st.data_editor(
-        df, hide_index=True, 
+        st.session_state.current_display_df, hide_index=True, 
         column_config={
-            "詳細": st.column_config.CheckboxColumn("結果入力", width="small"),
-            "写真(画像)": st.column_config.CheckboxColumn("写真管理", width="small"),
-            "No": st.column_config.NumberColumn(disabled=True, width="small"),
+            "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"),
+            "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
             "競技分類": st.column_config.SelectboxColumn("競技分類", options=["サッカー", "フットサル"]),
             "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"]),
             "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
@@ -266,13 +257,15 @@ else:
 
     st.markdown("---")
     if st.button("🖨️ 入力内容を反映してPDF印刷・保存"):
-        print_df = df.drop(columns=['詳細', '写真(画像)'])
+        # 印刷対象からチェックボックス列を除外
+        print_df = st.session_state.current_display_df.drop(columns=['結果入力', '写真管理'])
         html_table = print_df.to_html(index=False, classes='print-table')
         print_html = f"""
         <html>
         <head><style>
             .print-table {{ border-collapse: collapse; width: 100%; }}
             .print-table th, .print-table td {{ border: 1px solid black; padding: 8px; text-align: left; }}
+            .print-table th {{ background-color: #f2f2f2; }}
         </style></head>
         <body><h2 style="text-align: center;">KSC試合管理一覧</h2>{html_table}
         <script>setTimeout(function() {{ window.print(); }}, 500);</script>
