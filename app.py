@@ -27,6 +27,7 @@ def get_gspread_client():
         st.error(f"認証エラー: {e}")
         st.stop()
 
+@st.cache_data(ttl=60)
 def load_data():
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
@@ -77,87 +78,29 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 認証ロジック (抜本見直し) ---
-# クエリパラメータから認証状態を確認
-is_auth_param = st.query_params.get("auth") == "true"
+# --- 3. ログイン管理 ---
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
 
-if not is_auth_param:
-    # ログイン画面
+if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
-    u = st.text_input("ID", key="login_id")
-    p = st.text_input("PASS", type="password", key="login_pass")
-    
-    if st.button("ログイン", key="login_btn"):
+    u = st.text_input("ID")
+    p = st.text_input("PASS", type="password")
+    if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            # 認証成功: 有効期限をセットしてリダイレクト
-            expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-            st.query_params["auth"] = "true"
-            # ローカルストレージに保存するための小さなJSを一度だけ実行
-            components.html(f"""
-                <script>
-                    window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
-                    window.parent.location.reload();
-                </script>
-            """, height=0)
-            st.stop()
+            st.session_state.authenticated = True
+            st.rerun()
         else:
             st.error("IDまたはパスワードが違います")
     st.stop()
 
-# --- 4. 認証済みの場合の制御 (スクロール保持JS) ---
-persistence_js = """
-<script>
-    const STORAGE_KEY = 'ksc_auth_expiry';
-    const SCROLL_KEY = 'ksc_list_scroll_pos';
-    
-    // 期限切れチェック
-    const expiry = window.localStorage.getItem(STORAGE_KEY);
-    const now = Date.now() / 1000;
-    if (!expiry || Number(expiry) < now) {
-        window.localStorage.removeItem(STORAGE_KEY);
-        const url = new URL(window.parent.location.href);
-        url.searchParams.delete('auth');
-        window.parent.location.href = url.href;
-    }
-
-    // スクロール位置管理
-    window.parent.addEventListener('scroll', () => {
-        window.sessionStorage.setItem(SCROLL_KEY, window.parent.scrollY);
-    }, true);
-
-    const savedPos = window.sessionStorage.getItem(SCROLL_KEY);
-    if (savedPos) {
-        setTimeout(() => {
-            window.parent.scrollTo(0, parseInt(savedPos));
-        }, 150);
-    }
-</script>
-"""
-components.html(persistence_js, height=0)
-
-# --- 5. セッション & データ処理 ---
-if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
+# --- 4. セッション管理 ---
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
 
-def on_data_change():
-    changes = st.session_state["editor"]
-    for row_idx, edit_values in changes["edited_rows"].items():
-        actual_index = st.session_state.current_display_df.index[row_idx]
-        if edit_values.get("結果入力") is True:
-            st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
-            return
-        if edit_values.get("写真管理") is True:
-            st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
-            return
-        for col, val in edit_values.items():
-            if col not in ["結果入力", "写真管理"]:
-                st.session_state.df_list.at[actual_index, col] = val
-        update_row(actual_index, st.session_state.df_list.iloc[actual_index])
-
-# --- 6. 画面制御 ---
+# --- 5. 画面制御 ---
 if st.session_state.media_no is not None:
-    # (写真管理画面 ... 変更なし)
+    # 写真管理画面
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -191,7 +134,7 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
-    # (試合結果入力画面 ... 変更なし)
+    # 試合結果入力画面
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -231,41 +174,74 @@ elif st.session_state.selected_no is not None:
                 st.success("保存完了"); st.rerun()
 
 else:
-    # (メイン一覧画面 ... 変更なし)
+    # メイン一覧画面
     st.title("⚽ KSC試合管理一覧")
+    
+    # 検索とフィルタ
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
     with c2: cat_filter = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
     
-    df = st.session_state.df_list.copy()
-    if cat_filter != "すべて": df = df[df["カテゴリー"] == cat_filter]
-    if search_query: 
-        df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
-    
-    display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
-    st.session_state.current_display_df = df[[c for c in display_cols if c in df.columns]]
-    
-    st.data_editor(
-        st.session_state.current_display_df, hide_index=True, 
-        column_config={
-            "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"),
-            "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
-            "競技分類": st.column_config.SelectboxColumn("競技分類", options=["サッカー", "フットサル"]),
-            "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"]),
-            "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
-        }, 
-        use_container_width=True, key="editor", on_change=on_data_change
-    )
+    # 【抜本的改善】Fragmentを使用して、保存時に画面が上に戻るのを防ぐ
+    @st.fragment
+    def match_list_fragment():
+        # データロード
+        df = load_data()
+        if cat_filter != "すべて": df = df[df["カテゴリー"] == cat_filter]
+        if search_query: 
+            df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
+        
+        display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+        current_display_df = df[[c for c in display_cols if c in df.columns]]
+
+        # 表の編集・保存
+        edited_df = st.data_editor(
+            current_display_df, hide_index=True, 
+            column_config={
+                "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"),
+                "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
+                "競技分類": st.column_config.SelectboxColumn("競技分類", options=["サッカー", "フットサル"]),
+                "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"]),
+                "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
+            }, 
+            use_container_width=True, key="main_editor"
+        )
+
+        # 変更の検知
+        if st.session_state.main_editor["edited_rows"]:
+            for row_idx, edit_values in st.session_state.main_editor["edited_rows"].items():
+                actual_index = current_display_df.index[row_idx]
+                
+                # 画面遷移フラグ
+                if edit_values.get("結果入力") is True:
+                    st.session_state.selected_no = int(df.at[actual_index, "No"])
+                    st.rerun()
+                if edit_values.get("写真管理") is True:
+                    st.session_state.media_no = int(df.at[actual_index, "No"])
+                    st.rerun()
+                
+                # スプレッドシート更新
+                for col, val in edit_values.items():
+                    if col not in ["結果入力", "写真管理"]:
+                        df.at[actual_index, col] = val
+                update_row(actual_index, df.iloc[actual_index])
+            
+            # 部分的にキャッシュをクリアして再描画（全体リロードはしない）
+            st.cache_data.clear()
+
+    match_list_fragment()
 
     st.markdown("---")
     if st.button("🖨️ 入力内容を反映してPDF印刷・保存"):
-        cols_to_print = [c for c in display_cols if c not in ['結果入力', '写真管理']]
-        print_df = st.session_state.current_display_df[cols_to_print]
+        # 印刷用処理
+        df_for_print = load_data()
+        cols_to_print = ['対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類']
+        print_df = df_for_print[cols_to_print]
         html_table = print_df.to_html(index=False, classes='print-table')
         print_html = f"""
         <html>
         <head><style>
-            .print-table {{ border-collapse: collapse; width: 100%; }}
+            .print-table {{ border-collapse: collapse; width: 100%; font-size: 12px; }}
             .print-table th, .print-table td {{ border: 1px solid black; padding: 8px; text-align: left; }}
             .print-table th {{ background-color: #f2f2f2; }}
         </style></head>
