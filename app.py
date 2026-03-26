@@ -80,8 +80,8 @@ def update_row(actual_index, updated_row_series):
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# アプリ起動時にlocalStorageを確認し、有効期限内なら自動ログイン
-auth_check_js = """
+# JavaScriptでlocalStorageを確認し、有効ならURLパラメータを付与してリロード
+auth_js = """
 <script>
     const expiry = window.localStorage.getItem('ksc_auth_expiry');
     const now = Date.now() / 1000;
@@ -94,8 +94,9 @@ auth_check_js = """
     }
 </script>
 """
-components.html(auth_check_js, height=0)
+components.html(auth_js, height=0)
 
+# URLパラメータがあれば認証済みとする
 if st.query_params.get("auth") == "true":
     st.session_state.authenticated = True
 
@@ -104,9 +105,9 @@ if not st.session_state.authenticated:
     u, p = st.text_input("ID"), st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            # 6時間後のエポック秒を保存
+            # 6時間後の時間をlocalStorageに保存
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
-            set_storage_js = f"""
+            login_success_js = f"""
             <script>
                 window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
                 const url = new URL(window.location.href);
@@ -114,7 +115,7 @@ if not st.session_state.authenticated:
                 window.location.href = url.href;
             </script>
             """
-            components.html(set_storage_js, height=0)
+            components.html(login_success_js, height=0)
             st.session_state.authenticated = True
             st.rerun()
         else: st.error("IDまたはパスワードが違います")
