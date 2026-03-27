@@ -14,7 +14,7 @@ import time
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
-# カスタムCSS（オレンジボタン用）
+# オレンジボタン用CSS
 st.markdown("""
     <style>
     div.stButton > button:first-child {
@@ -79,8 +79,11 @@ def add_new_row_sequentially(new_data_dict):
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        existing_nos = ws.col_values(1)[1:]
-        new_no = max([int(n) for n in existing_nos if n.isdigit()] + [0]) + 1
+        
+        # 既存データのNoから新しいNoを生成
+        all_vals = ws.get_all_values()
+        existing_nos = [int(row[0]) for row in all_vals[1:] if row and row[0].isdigit()]
+        new_no = max(existing_nos + [0]) + 1
         
         row_values = []
         for col in SHEET_COLUMNS:
@@ -90,8 +93,8 @@ def add_new_row_sequentially(new_data_dict):
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
         
-        # 空白セルの最初（データの最後）に順次追記
-        ws.append_row(row_values)
+        # 記載済みの行のすぐ下（最終行）に追記
+        ws.append_row(row_values, value_input_option='RAW')
         return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
@@ -103,12 +106,14 @@ def delete_selected_rows(nos_to_delete):
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         all_rows = ws.get_all_values()
-        rows_to_delete = []
+        
+        rows_to_delete_indices = []
         for i, row in enumerate(all_rows):
             if i == 0: continue
-            if row[0].isdigit() and int(row[0]) in nos_to_delete:
-                rows_to_delete.append(i + 1)
-        for row_idx in sorted(rows_to_delete, reverse=True):
+            if row and row[0].isdigit() and int(row[0]) in nos_to_delete:
+                rows_to_delete_indices.append(i + 1)
+        
+        for row_idx in sorted(rows_to_delete_indices, reverse=True):
             ws.delete_rows(row_idx)
         return True
     except Exception as e:
@@ -116,14 +121,14 @@ def delete_selected_rows(nos_to_delete):
         return False
 
 # --- 削除確認ポップアップ ---
-@st.dialog("試合データの削除")
-def confirm_delete_dialog(nos):
-    st.write(f"⚠️ 選択された **{len(nos)}件** のデータを削除します。")
-    st.write("この操作は元に戻せません。本当によろしいですか？")
+@st.dialog("試合データの削除確認")
+def delete_confirm_dialog(nos):
+    st.warning(f"⚠️ 選択された {len(nos)} 件のデータを削除します。よろしいですか？")
+    st.write("この操作は取り消せません。")
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("はい、削除します", type="primary", use_container_width=True):
+        if st.button("はい、削除する", type="primary", use_container_width=True):
             if delete_selected_rows(nos):
                 st.session_state.df_list = load_data()
                 st.rerun()
@@ -245,6 +250,7 @@ else:
     
     current_df = df[display_cols].reset_index(drop=True)
     
+    # 編集用データ。'No'は内部処理用なのでconfigで非表示
     edited_df = st.data_editor(
         current_df, hide_index=True, 
         column_config={
@@ -257,13 +263,17 @@ else:
         use_container_width=True, key="main_editor"
     )
 
+    # チェックが入った瞬間にポップアップを出すための監視ロジック
     nos_to_delete = []
     for i in range(len(edited_df)):
         edit_row = edited_df.iloc[i]
         original_no = int(current_df.iloc[i]["No"])
         
+        # 選択（削除対象）の検知
         if edit_row.get("選択") == True:
             nos_to_delete.append(original_no)
+        
+        # 他のボタン（結果/写真）の検知
         if edit_row.get("結果入力") == True:
             st.session_state.selected_no = original_no
             st.rerun()
@@ -271,11 +281,9 @@ else:
             st.session_state.media_no = original_no
             st.rerun()
 
-    # 選択されている場合に目立つ削除ボタンを表示
+    # チェックが入っていたら即座にダイアログを表示
     if nos_to_delete:
-        st.divider()
-        if st.button(f"🗑️ 選択した {len(nos_to_delete)} 件を削除する", type="secondary", use_container_width=True):
-            confirm_delete_dialog(nos_to_delete)
+        delete_confirm_dialog(nos_to_delete)
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
