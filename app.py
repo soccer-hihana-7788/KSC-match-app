@@ -9,12 +9,14 @@ import base64
 from io import BytesIO
 from PIL import Image, ImageOps
 import streamlit.components.v1 as components
+import time
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
 # --- 2. スプレッドシート設定 ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8jh1IeSnu4Afn7a4en7yvLc/edit#gid=0"
+# スプレッドシート側のオリジナルの列名定義
 SHEET_COLUMNS = ["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"]
 
 def get_gspread_client():
@@ -38,18 +40,27 @@ def load_data():
     
     df = pd.DataFrame(data) if data else pd.DataFrame(columns=SHEET_COLUMNS)
     
-    if "競技分類" not in df.columns: df.insert(3, "競技分類", "サッカー")
+    # 競技分類の欠損補完
+    if "競技分類" not in df.columns:
+        df["競技分類"] = "サッカー"
     df["競技分類"] = df["競技分類"].replace("", "サッカー")
-    if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
-    if '日時' in df.columns: df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # 制御用列の追加
-    df.insert(0, '選択', False) # 削除用の選択列を一番左に
+    if 'No' in df.columns:
+        df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
+    if '日時' in df.columns:
+        df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
+    
+    # UI表示用に「試合場所」を「対戦場所」として扱う（スプレッドシート側がどちらでも対応可能にする）
+    if "試合場所" in df.columns:
+        df = df.rename(columns={"試合場所": "対戦場所"})
+    elif "対戦場所" not in df.columns:
+        df["対戦場所"] = ""
+
+    # 制御用フラグ列の初期化（スプレッドシートには保存しない列）
+    df.insert(0, '選択', False)
     df['結果入力'] = False
     df['写真管理'] = False
     
-    if "試合場所" in df.columns:
-        df = df.rename(columns={"試合場所": "対戦場所"})
     return df
 
 def add_new_row_at_top(new_data_dict):
@@ -57,8 +68,6 @@ def add_new_row_at_top(new_data_dict):
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        
-        # 新しいNoの採番
         existing_nos = ws.col_values(1)[1:]
         new_no = max([int(n) for n in existing_nos if n.isdigit()] + [0]) + 1
         
@@ -69,8 +78,6 @@ def add_new_row_at_top(new_data_dict):
             else: val = new_data_dict.get(col, "")
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
-            
-        # 空白行の上部（データ行の先頭 2行目）に挿入
         ws.insert_row(row_values, 2)
         return True
     except Exception as e:
@@ -82,24 +89,23 @@ def delete_selected_rows(nos_to_delete):
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        all_data = ws.get_all_records()
-        
-        # 行番号を特定して逆順に削除（行ズレ防止）
         for no in sorted(nos_to_delete, reverse=True):
-            # No列(1列目)を検索して行削除
             cell = ws.find(str(no), in_col=1)
-            if cell:
-                ws.delete_rows(cell.row)
+            if cell: ws.delete_rows(cell.row)
         return True
     except Exception as e:
         st.error(f"削除エラー: {e}")
         return False
 
-# --- 3. 認証・状態管理 ---
-if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
-if 'page' not in st.session_state: st.session_state.page = "list"
-if 'selected_no' not in st.session_state: st.session_state.selected_no = None
-if 'media_no' not in st.session_state: st.session_state.media_no = None
+# --- 3. 状態管理 ---
+if 'df_list' not in st.session_state:
+    st.session_state.df_list = load_data()
+if 'page' not in st.session_state:
+    st.session_state.page = "list"
+if 'selected_no' not in st.session_state:
+    st.session_state.selected_no = None
+if 'media_no' not in st.session_state:
+    st.session_state.media_no = None
 
 is_authenticated = st.query_params.get("auth") == "true"
 
@@ -119,29 +125,53 @@ if not is_authenticated:
 if st.session_state.media_no is not None:
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
-    if st.button("← 一覧に戻る"): st.session_state.media_no = None; st.rerun()
-    client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
-    try: ws_media = sh.worksheet("media_storage")
-    except: ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3"); ws_media.append_row(["match_no", "filename", "base64_data"])
+    if st.button("← 一覧に戻る"):
+        st.session_state.media_no = None
+        st.rerun()
+    
+    client = get_gspread_client()
+    sh = client.open_by_url(SPREADSHEET_URL)
+    try:
+        ws_media = sh.worksheet("media_storage")
+    except:
+        ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3")
+        ws_media.append_row(["match_no", "filename", "base64_data"])
+
     uploaded_file = st.file_uploader("写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード"):
-        img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
-        buf = BytesIO(); img.thumbnail((350, 350)); img.save(buf, format="JPEG", quality=35)
-        encoded = base64.b64encode(buf.getvalue()).decode()
-        ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
+        with st.spinner("画像を最適化中..."):
+            try:
+                img = Image.open(uploaded_file)
+                img = ImageOps.exif_transpose(img).convert("RGB")
+                buf = BytesIO()
+                img.thumbnail((800, 800))
+                img.save(buf, format="JPEG", quality=50, optimize=True)
+                encoded = base64.b64encode(buf.getvalue()).decode()
+                ws_media.append_row([str(no), uploaded_file.name, encoded])
+                st.success("完了")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"添付エラー: {e}")
+
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
         cols = st.columns(3)
         for idx, item in enumerate(match_photos):
             with cols[idx % 3]: 
                 st.image(base64.b64decode(item['base64_data']), use_container_width=True)
-                if st.button("削除", key=f"del_{idx}"): cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
+                if st.button("削除", key=f"del_{idx}"):
+                    cell = ws_media.find(item['base64_data'])
+                    if cell: ws_media.delete_rows(cell.row)
+                    st.rerun()
 
-# B. 試合結果
+# B. 試合結果入力
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
-    if st.button("← 一覧に戻る"): st.session_state.selected_no = None; st.rerun()
+    if st.button("← 一覧に戻る"):
+        st.session_state.selected_no = None
+        st.rerun()
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
     except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
@@ -159,7 +189,9 @@ elif st.session_state.selected_no is not None:
 # C. 新規作成
 elif st.session_state.page == "create":
     st.title("➕ 新規試合登録")
-    if st.button("← 戻る"): st.session_state.page = "list"; st.rerun()
+    if st.button("← 戻る"):
+        st.session_state.page = "list"
+        st.rerun()
     with st.form("create_form"):
         c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"])
         c_date = st.date_input("日時", value=date.today())
@@ -171,28 +203,31 @@ elif st.session_state.page == "create":
         if st.form_submit_button("登録して一覧の最上部へ保存"):
             new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
             if add_new_row_at_top(new_data):
-                st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
+                st.session_state.df_list = load_data()
+                st.session_state.page = "list"
+                st.rerun()
 
 # D. 一覧
 else:
     st.title("⚽ KSC試合管理一覧")
     if st.button("➕ 新規試合登録", use_container_width=True):
-        st.session_state.page = "create"; st.rerun()
-        
+        st.session_state.page = "create"
+        st.rerun()
+    
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
     with c2: cat_filter = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
     
     df = st.session_state.df_list.copy()
-    if cat_filter != "すべて": df = df[df["カテゴリー"] == cat_filter]
-    if search_query: df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
+    if cat_filter != "すべて":
+        df = df[df["カテゴリー"] == cat_filter]
+    if search_query:
+        df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # 表示列の定義
-    display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+    # エラー回避: 実際に存在する列だけをdisplay_colsとして定義
+    requested_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+    display_cols = [c for c in requested_cols if c in df.columns]
     current_df = df[display_cols]
-    
-    # 削除ボタンの表示判定
-    selected_indices = []
     
     edited_df = st.data_editor(
         current_df, hide_index=True, 
@@ -205,25 +240,32 @@ else:
         use_container_width=True, key="main_editor"
     )
 
-    # 選択チェックボックスの監視
     nos_to_delete = []
-    for idx, row in edited_df.iterrows():
-        if row["選択"]:
-            nos_to_delete.append(df.iloc[idx]["No"])
-        if row["結果入力"]:
-            st.session_state.selected_no = int(df.iloc[idx]["No"]); st.rerun()
-        if row["写真管理"]:
-            st.session_state.media_no = int(df.iloc[idx]["No"]); st.rerun()
+    # ユーザー操作の検知
+    for idx in range(len(edited_df)):
+        orig_row = df.iloc[idx]
+        edit_row = edited_df.iloc[idx]
+        
+        if edit_row["選択"]:
+            nos_to_delete.append(int(orig_row["No"]))
+        if edit_row["結果入力"]:
+            st.session_state.selected_no = int(orig_row["No"])
+            st.rerun()
+        if edit_row["写真管理"]:
+            st.session_state.media_no = int(orig_row["No"])
+            st.rerun()
 
-    # 削除ボタンの出現
     if nos_to_delete:
-        st.warning(f"{len(nos_to_delete)}件のデータが選択されています。")
+        st.warning(f"{len(nos_to_delete)}件選択中")
         if st.button("🗑️ 選択した行を削除する", type="primary"):
             if delete_selected_rows(nos_to_delete):
-                st.success("削除しました"); st.session_state.df_list = load_data(); st.rerun()
+                st.session_state.df_list = load_data()
+                st.rerun()
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
-        print_df = current_df.drop(columns=['選択', '結果入力', '写真管理'])
-        html_table = print_df.to_html(index=False, classes='print-table')
-        components.html(f"<html><head><style>.print-table {{ border-collapse: collapse; width: 100%; }} .print-table th, .print-table td {{ border: 1px solid black; padding: 8px; }}</style></head><body>{html_table}<script>setTimeout(()=>{{window.print()}},500)</script></body></html>", height=0)
+        # 印刷用からは制御列を除外
+        print_cols = [c for c in display_cols if c not in ['選択', '結果入力', '写真管理']]
+        print_df = current_df[print_cols]
+        html_table = print_df.to_html(index=False)
+        components.html(f"<html><body>{html_table}<script>setTimeout(()=>{{window.print()}},500)</script></body></html>", height=0)
