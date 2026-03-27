@@ -77,49 +77,53 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 抜本的スクロールロック（JSによる強制維持） ---
+# --- 3. 【抜本改善】スクロール強制固定ロジック ---
 st.markdown("""
     <style>
-    /* ブラウザの挙動をCSSで物理的に制限 */
+    /* ブラウザの自動スクロール挙動をCSSで封鎖 */
     html { scroll-behavior: auto !important; overscroll-behavior-y: none !important; }
     </style>
 """, unsafe_allow_html=True)
 
+# セレクトボックス操作時の「跳ね上がり」を、JSが秒間100回の頻度で抑え込みます
 persistence_js = """
 <script>
-    const STORAGE_KEY = 'ksc_scroll_lock_fixed_v8';
+    const STORAGE_KEY = 'ksc_scroll_lock_fixed_v9';
     const p = window.parent;
 
-    // 現在の座標を常に記録
+    // 現在の座標を常にリアルタイムで保存
     p.addEventListener('scroll', () => {
-        if (p.scrollY > 0) window.localStorage.setItem(STORAGE_KEY, p.scrollY);
+        if (p.scrollY > 0) {
+            window.localStorage.setItem(STORAGE_KEY, p.scrollY);
+        }
     }, { passive: true });
 
-    // 強制位置ロック：ページ更新後の5秒間、あらゆる「上に戻る」動きを上書きし続ける
-    function lockPosition() {
+    // 強制ロック関数：5秒間、あらゆる「最上部へ戻る」命令を上書きし続ける
+    function forceLockPosition() {
         const saved = window.localStorage.getItem(STORAGE_KEY);
         if (!saved) return;
         
         const targetY = parseInt(saved);
         const startTime = Date.now();
 
-        // 秒間100回の頻度で現在地を死守
-        const timer = setInterval(() => {
-            p.scrollTo(0, targetY);
-            if (Date.now() - startTime > 5000) clearInterval(timer);
-        }, 10);
-        
-        // requestAnimationFrameでも二重に固定（よりスムーズな維持のため）
+        // requestAnimationFrame（描画直前）とsetIntervalの二重で固定
         function sync() {
             p.scrollTo(0, targetY);
-            if (Date.now() - startTime < 5000) requestAnimationFrame(sync);
+            if (Date.now() - startTime < 5000) {
+                requestAnimationFrame(sync);
+            }
         }
         sync();
+
+        const backupTimer = setInterval(() => {
+            p.scrollTo(0, targetY);
+            if (Date.now() - startTime > 5000) clearInterval(backupTimer);
+        }, 10);
     }
 
-    // 認証チェック & 初期化
+    // 認証管理と位置復元の初期化
     const AUTH_KEY = 'ksc_auth_expiry';
-    function init() {
+    function checkAndInitialize() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
         const url = new URL(p.location.href);
@@ -135,11 +139,11 @@ persistence_js = """
             return;
         }
         
-        // 再読み込みが発生したら即座にロックを発動
-        if (hasAuth) lockPosition();
+        // 再描画（Rerun）が発生した瞬間に強制ロックを発動
+        if (hasAuth) forceLockPosition();
     }
 
-    init();
+    checkAndInitialize();
 </script>
 """
 components.html(persistence_js, height=0)
@@ -169,12 +173,14 @@ def on_data_change():
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
+        
         if edit_values.get("結果入力") is True:
             st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
         if edit_values.get("写真管理") is True:
             st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
+            
         for col, val in edit_values.items():
             if col not in ["結果入力", "写真管理"]:
                 st.session_state.df_list.at[actual_index, col] = val
