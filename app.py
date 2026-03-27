@@ -55,19 +55,19 @@ def load_data():
             return pd.DataFrame(columns=SHEET_COLUMNS)
         
         header = all_values[0]
-        # 文字が入っている行だけを表示対象にする
+        # 値が入っている行のみをデータフレーム化
         rows = [r for r in all_values[1:] if any(cell.strip() for cell in r)]
         df = pd.DataFrame(rows, columns=header)
     except Exception:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
     
+    # 既存の列補正処理
     if "競技分類" not in df.columns: df["競技分類"] = "サッカー"
     df["競技分類"] = df["競技分類"].replace("", "サッカー")
     if 'No' in df.columns:
         df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
     if '日時' in df.columns:
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
-    
     if "試合場所" in df.columns:
         df = df.rename(columns={"試合場所": "対戦場所"})
     elif "対戦場所" not in df.columns:
@@ -76,30 +76,29 @@ def load_data():
     df.insert(0, '選択', False)
     df['結果入力'] = False
     df['写真管理'] = False
-    
     return df
 
 def add_new_row_strictly_at_blank_top(new_data_dict):
-    """【抜本修正】記載済み行のすぐ下の行（空きセル最上部）に登録する"""
+    """【抜本改善】既存データのすぐ下の行（空白セルの最上部）を特定して書き込む"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # 全データ取得
+        # 全データ（空行含む）を取得
         all_values = ws.get_all_values()
         
-        # 実際に値が入っている最後の行番号を特定する
+        # 実際に値が入っている「本当の最終行」を判定
         actual_last_row = 0
         for i, row in enumerate(all_values):
             if any(cell.strip() for cell in row):
-                actual_last_row = i + 1 # 1から始まる行番号
+                actual_last_row = i + 1
         
-        # 新しいNoの採番
+        # 新しいNoを採番
         existing_nos = [int(row[0]) for row in all_values[1:] if row and str(row[0]).isdigit()]
         new_no = max(existing_nos + [0]) + 1
         
-        # 登録データの作成
+        # 書き込み用データの作成
         row_values = []
         for col in SHEET_COLUMNS:
             if col == "No": val = new_no
@@ -108,9 +107,9 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
         
-        # 【抜本修正】「本当の最終行」の1個下の行へ、直接範囲指定して更新する
+        # 【重要】既存データの「すぐ下の行」を指定して更新
         target_row = actual_last_row + 1
-        ws.update(f"A{target_row}", [row_values])
+        ws.update(range_name=f"A{target_row}", values=[row_values])
         return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
@@ -122,13 +121,11 @@ def delete_selected_rows(nos_to_delete):
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         all_rows = ws.get_all_values()
-        
         rows_to_delete_indices = []
         for i, row in enumerate(all_rows):
             if i == 0: continue
             if row and str(row[0]).isdigit() and int(row[0]) in nos_to_delete:
                 rows_to_delete_indices.append(i + 1)
-        
         for row_idx in sorted(rows_to_delete_indices, reverse=True):
             ws.delete_rows(row_idx)
         return True
@@ -136,7 +133,7 @@ def delete_selected_rows(nos_to_delete):
         st.error(f"削除エラー: {e}")
         return False
 
-# --- 削除確認ポップアップ ---
+# --- 削除確認ダイアログ ---
 @st.dialog("試合データの削除確認")
 def delete_confirm_dialog(nos):
     st.warning(f"⚠️ 選択された {len(nos)} 件のデータを削除します。")
@@ -150,7 +147,7 @@ def delete_confirm_dialog(nos):
                 st.session_state.df_list = load_data()
                 st.rerun()
     with c2:
-        # キャンセルボタンの修正：エディタの状態を消してリロード
+        # キャンセル時：エディタの状態を破棄して一覧へ戻る
         if st.button("キャンセル", use_container_width=True):
             if "main_editor" in st.session_state:
                 del st.session_state["main_editor"]
@@ -179,8 +176,8 @@ if not is_authenticated:
     st.stop()
 
 # --- 4. 画面遷移 ---
-
 if st.session_state.media_no is not None:
+    # 写真管理画面（省略なし）
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -191,7 +188,6 @@ if st.session_state.media_no is not None:
     except:
         ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3")
         ws_media.append_row(["match_no", "filename", "base64_data"])
-
     uploaded_file = st.file_uploader("写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード"):
         with st.spinner("保存中..."):
@@ -203,7 +199,6 @@ if st.session_state.media_no is not None:
                 ws_media.append_row([str(no), uploaded_file.name, encoded])
                 st.success("完了"); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"添付エラー: {e}")
-
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
         cols = st.columns(3)
@@ -215,6 +210,7 @@ if st.session_state.media_no is not None:
                     if cell: ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
+    # 結果入力画面（省略なし）
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -247,7 +243,7 @@ elif st.session_state.page == "create":
         c_memo = st.text_area("備考")
         if st.form_submit_button("試合管理一覧へ登録"):
             new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
-            # 空きセルの最上部へ登録
+            # 空きセルの最上部へ書き込み
             if add_new_row_strictly_at_blank_top(new_data):
                 st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
@@ -268,7 +264,6 @@ else:
     
     display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
     display_cols = [c for c in display_cols if c in df.columns]
-    
     current_df = df[display_cols].reset_index(drop=True)
     
     edited_df = st.data_editor(
@@ -287,10 +282,8 @@ else:
     for i in range(len(edited_df)):
         edit_row = edited_df.iloc[i]
         original_no = int(current_df.iloc[i]["No"])
-        
         if edit_row.get("選択") == True:
             nos_to_delete.append(original_no)
-        
         if edit_row.get("結果入力") == True:
             st.session_state.selected_no = original_no
             st.rerun()
