@@ -77,40 +77,44 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 6時間ログイン維持 & 抜本的なスクロール完全固定JS ---
-# セレクトボックス（カテゴリー等）変更時の「跳ね上がり」を徹底的に抑え込む
+# --- 3. 抜本的スクロール固定 & 6時間ログイン維持 ---
+# 選択肢変更時の強制リセットをCSSとJSの両面から封じ込めます
+st.markdown("""
+    <style>
+    html { scroll-behavior: auto !important; }
+    </style>
+""", unsafe_allow_html=True)
+
 persistence_js = """
 <script>
     const AUTH_KEY = 'ksc_auth_expiry';
-    const SCROLL_KEY = 'ksc_scroll_pos_v3';
+    const SCROLL_KEY = 'ksc_scroll_pos_v4';
     
-    // スクロール位置を復元する関数（複数回実行して確実性を高める）
-    function restoreScroll() {
+    // 強制的にスクロール位置を固定する関数
+    function forceScroll() {
         const savedPos = window.localStorage.getItem(SCROLL_KEY);
         if (savedPos) {
-            const pos = parseInt(savedPos);
-            window.parent.scrollTo(0, pos);
-            // Streamlitの自動リセットに対抗するため、遅延実行を重ねる
-            setTimeout(() => window.parent.scrollTo(0, pos), 10);
-            setTimeout(() => window.parent.scrollTo(0, pos), 100);
-            setTimeout(() => window.parent.scrollTo(0, pos), 500);
+            const y = parseInt(savedPos);
+            const parent = window.parent;
+            
+            // 描画サイクルに合わせて複数回実行
+            parent.scrollTo(0, y);
+            requestAnimationFrame(() => parent.scrollTo(0, y));
+            setTimeout(() => parent.scrollTo(0, y), 50);
+            setTimeout(() => parent.scrollTo(0, y), 150);
+            setTimeout(() => parent.scrollTo(0, y), 500);
         }
     }
 
-    // 常に最新のスクロール位置を監視・保存
+    // スクロール位置の記録
     window.parent.addEventListener('scroll', () => {
-        const currentPos = window.parent.scrollY;
-        if (currentPos > 0) {
-            window.localStorage.setItem(SCROLL_KEY, currentPos);
+        if (window.parent.scrollY > 0) {
+            window.localStorage.setItem(SCROLL_KEY, window.parent.scrollY);
         }
     }, { passive: true });
 
-    // ページ読み込み完了時に復元を実行
-    if (document.readyState === 'complete') {
-        restoreScroll();
-    } else {
-        window.addEventListener('load', restoreScroll);
-    }
+    // 起動・再読み込み時に実行
+    forceScroll();
 
     // 認証チェック
     function checkAuth() {
@@ -127,7 +131,6 @@ persistence_js = """
             }
             return;
         }
-
         if (expiry && Number(expiry) > now && !hasAuthParam) {
             url.searchParams.set('auth', 'true');
             window.parent.location.href = url.href;
