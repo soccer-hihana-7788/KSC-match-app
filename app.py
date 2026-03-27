@@ -14,6 +14,23 @@ import time
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
+# カスタムCSS（オレンジボタン用）
+st.markdown("""
+    <style>
+    div.stButton > button:first-child {
+        background-color: #ff8c00;
+        color: white;
+        border-radius: 5px;
+        font-weight: bold;
+        border: none;
+    }
+    div.stButton > button:hover {
+        background-color: #e67e00;
+        color: white;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # --- 2. スプレッドシート設定 ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8jh1IeSnu4Afn7a4en7yvLc/edit#gid=0"
 SHEET_COLUMNS = ["No", "カテゴリー", "日時", "競技分類", "対戦相手", "試合場所", "試合分類", "備考"]
@@ -57,7 +74,7 @@ def load_data():
     
     return df
 
-def add_new_row_at_bottom(new_data_dict):
+def add_new_row_sequentially(new_data_dict):
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
@@ -73,7 +90,7 @@ def add_new_row_at_bottom(new_data_dict):
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
         
-        # 仕様変更：リストの最後（空白行の最初）に追加
+        # 空白セルの最初（データの最後）に順次追記
         ws.append_row(row_values)
         return True
     except Exception as e:
@@ -85,17 +102,12 @@ def delete_selected_rows(nos_to_delete):
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        # 行番号のズレを防ぐため、スプレッドシートの全データを取得して検索
         all_rows = ws.get_all_values()
-        
-        # 削除対象のNoが含まれる行番号（スプレッドシート上の行）を特定
         rows_to_delete = []
         for i, row in enumerate(all_rows):
-            if i == 0: continue # ヘッダー
+            if i == 0: continue
             if row[0].isdigit() and int(row[0]) in nos_to_delete:
                 rows_to_delete.append(i + 1)
-        
-        # 下の行から順に削除（行番号の変化を防ぐ）
         for row_idx in sorted(rows_to_delete, reverse=True):
             ws.delete_rows(row_idx)
         return True
@@ -104,17 +116,20 @@ def delete_selected_rows(nos_to_delete):
         return False
 
 # --- 削除確認ポップアップ ---
-@st.dialog("データの削除確認")
+@st.dialog("試合データの削除")
 def confirm_delete_dialog(nos):
-    st.warning(f"選択された {len(nos)} 件の試合データを削除します。この操作は取り消せません。")
-    if st.button("はい、削除します", type="primary", use_container_width=True):
-        if delete_selected_rows(nos):
-            st.success("削除が完了しました。")
-            time.sleep(1)
-            st.session_state.df_list = load_data()
+    st.write(f"⚠️ 選択された **{len(nos)}件** のデータを削除します。")
+    st.write("この操作は元に戻せません。本当によろしいですか？")
+    st.divider()
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("はい、削除します", type="primary", use_container_width=True):
+            if delete_selected_rows(nos):
+                st.session_state.df_list = load_data()
+                st.rerun()
+    with c2:
+        if st.button("キャンセル", use_container_width=True):
             st.rerun()
-    if st.button("キャンセル", use_container_width=True):
-        st.rerun()
 
 # --- 3. 状態管理 ---
 if 'df_list' not in st.session_state:
@@ -205,9 +220,9 @@ elif st.session_state.page == "create":
         c_loc = st.text_input("対戦場所")
         c_class = st.text_input("試合分類")
         c_memo = st.text_area("備考")
-        if st.form_submit_button("登録して下部へ保存"):
+        if st.form_submit_button("試合管理一覧へ登録"):
             new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
-            if add_new_row_at_bottom(new_data):
+            if add_new_row_sequentially(new_data):
                 st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
 else:
@@ -256,9 +271,10 @@ else:
             st.session_state.media_no = original_no
             st.rerun()
 
+    # 選択されている場合に目立つ削除ボタンを表示
     if nos_to_delete:
-        st.error(f"⚠️ {len(nos_to_delete)} 件のデータが選択されています。")
-        if st.button("🗑️ 選択した行を削除する", type="primary", use_container_width=True):
+        st.divider()
+        if st.button(f"🗑️ 選択した {len(nos_to_delete)} 件を削除する", type="secondary", use_container_width=True):
             confirm_delete_dialog(nos_to_delete)
 
     st.markdown("---")
