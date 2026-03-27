@@ -55,51 +55,54 @@ def load_data():
             return pd.DataFrame(columns=SHEET_COLUMNS)
         
         header = all_values[0]
-        # Noが入っている有効な行だけを抽出
-        rows = [r for r in all_values[1:] if len(r) > 0 and r[0].strip() != ""]
-        df = pd.DataFrame(rows, columns=header)
+        # 【修正】Noまたは対戦相手が入力されている有効な行のみを厳密に抽出
+        # これにより、下部の空行にデフォルト値が入るのを防ぎます
+        valid_rows = []
+        for r in all_values[1:]:
+            if len(r) > 4 and (r[0].strip() != "" or r[4].strip() != ""):
+                valid_rows.append(r)
+        
+        df = pd.DataFrame(valid_rows, columns=header)
     except Exception:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
     
-    # 既存仕様の維持
-    if "競技分類" not in df.columns: df["競技分類"] = "サッカー"
-    df["競技分類"] = df["競技分類"].replace("", "サッカー")
-    if 'No' in df.columns:
-        df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
-    if '日時' in df.columns:
-        df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
-    if "試合場所" in df.columns:
-        df = df.rename(columns={"試合場所": "対戦場所"})
-    elif "対戦場所" not in df.columns:
-        df["対戦場所"] = ""
+    # 有効なデータのみ型変換（空行には適用しない）
+    if not df.empty:
+        if 'No' in df.columns:
+            df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
+        if '日時' in df.columns:
+            df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
+        
+        # カラム名の互換性維持
+        if "試合場所" in df.columns:
+            df = df.rename(columns={"試合場所": "対戦場所"})
+        elif "対戦場所" not in df.columns:
+            df["対戦場所"] = ""
 
+    # UI用カラムの追加
     df.insert(0, '選択', False)
     df['結果入力'] = False
     df['写真管理'] = False
     return df
 
 def add_new_row_strictly_at_blank_top(new_data_dict):
-    """【抜本改善】空白セルの最下部ではなく、上から見て最初の空き行に登録する"""
+    """【維持】記載済み行のすぐ下の行（空きセル最上部）に登録する"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # A列（No）の値をすべて取得
+        # A列（No）を取得して本当の最終行を特定
         no_column_values = ws.col_values(1)
-        
-        # 1行目から順にチェックし、データが入っている最後の行番号を特定
-        # 枠線があってもNoが空ならそこを書き込み候補とする
         last_data_idx = 0
         for i, val in enumerate(no_column_values):
             if val.strip() != "":
-                last_data_idx = i + 1 # 1-indexed
+                last_data_idx = i + 1
 
-        # Noの採番
+        # 採番
         existing_nos = [int(v) for v in no_column_values[1:] if v.strip().isdigit()]
         new_no = max(existing_nos + [0]) + 1
         
-        # 書き込みデータの作成
         row_values = []
         for col in SHEET_COLUMNS:
             if col == "No": val = new_no
@@ -108,7 +111,6 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
         
-        # 【抜本修正】「データの入っている最後の行の直後」をピンポイントで更新
         target_row = last_data_idx + 1
         ws.update(f"A{target_row}", [row_values])
         return True
@@ -147,7 +149,6 @@ def delete_confirm_dialog(nos):
                 st.session_state.df_list = load_data()
                 st.rerun()
     with c2:
-        # キャンセルボタン: セッションキャッシュを消してリロード
         if st.button("キャンセル", use_container_width=True):
             if "main_editor" in st.session_state:
                 del st.session_state["main_editor"]
@@ -241,7 +242,6 @@ elif st.session_state.page == "create":
         c_memo = st.text_area("備考")
         if st.form_submit_button("試合管理一覧へ登録"):
             new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
-            # 空きセルの最上部へ書き込み
             if add_new_row_strictly_at_blank_top(new_data):
                 st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
@@ -260,41 +260,45 @@ else:
     if search_query:
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
-    display_cols = [c for c in display_cols if c in df.columns]
-    current_df = df[display_cols].reset_index(drop=True)
-    
-    edited_df = st.data_editor(
-        current_df, hide_index=True, 
-        column_config={
-            "選択": st.column_config.CheckboxColumn("選択", width="small"),
-            "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"),
-            "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
-            "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"),
-            "No": None
-        }, 
-        use_container_width=True, key="main_editor"
-    )
+    if not df.empty:
+        display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
+        display_cols = [c for c in display_cols if c in df.columns]
+        current_df = df[display_cols].reset_index(drop=True)
+        
+        edited_df = st.data_editor(
+            current_df, hide_index=True, 
+            column_config={
+                "選択": st.column_config.CheckboxColumn("選択", width="small"),
+                "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"),
+                "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
+                "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"),
+                "No": None
+            }, 
+            use_container_width=True, key="main_editor"
+        )
 
-    nos_to_delete = []
-    for i in range(len(edited_df)):
-        edit_row = edited_df.iloc[i]
-        original_no = int(current_df.iloc[i]["No"])
-        if edit_row.get("選択") == True:
-            nos_to_delete.append(original_no)
-        if edit_row.get("結果入力") == True:
-            st.session_state.selected_no = original_no
-            st.rerun()
-        if edit_row.get("写真管理") == True:
-            st.session_state.media_no = original_no
-            st.rerun()
+        nos_to_delete = []
+        for i in range(len(edited_df)):
+            edit_row = edited_df.iloc[i]
+            # エラー防止のため、No列の存在と値をチェック
+            if "No" in current_df.columns:
+                original_no = int(current_df.iloc[i]["No"])
+                if edit_row.get("選択") == True:
+                    nos_to_delete.append(original_no)
+                if edit_row.get("結果入力") == True:
+                    st.session_state.selected_no = original_no
+                    st.rerun()
+                if edit_row.get("写真管理") == True:
+                    st.session_state.media_no = original_no
+                    st.rerun()
 
-    if nos_to_delete:
-        delete_confirm_dialog(nos_to_delete)
+        if nos_to_delete:
+            delete_confirm_dialog(nos_to_delete)
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
-        print_cols = [c for c in display_cols if c not in ['選択', '結果入力', '写真管理', 'No']]
-        print_df = current_df[print_cols]
-        html_table = print_df.to_html(index=False)
-        components.html(f"<html><body>{html_table}<script>setTimeout(()=>{{window.print()}},500)</script></body></html>", height=0)
+        if not df.empty:
+            print_cols = [c for c in display_cols if c not in ['選択', '結果入力', '写真管理', 'No']]
+            print_df = current_df[print_cols]
+            html_table = print_df.to_html(index=False)
+            components.html(f"<html><body>{html_table}<script>setTimeout(()=>{{window.print()}},500)</script></body></html>", height=0)
