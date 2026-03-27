@@ -50,13 +50,12 @@ def load_data():
     sh = client.open_by_url(SPREADSHEET_URL)
     ws_list = sh.get_worksheet(0)
     try:
-        # 見かけ上の空行を除外して読み込む
         all_values = ws_list.get_all_values()
         if not all_values:
             return pd.DataFrame(columns=SHEET_COLUMNS)
         
         header = all_values[0]
-        # 実際に値がある行だけを抽出
+        # 文字が入っている行だけを表示対象にする
         rows = [r for r in all_values[1:] if any(cell.strip() for cell in r)]
         df = pd.DataFrame(rows, columns=header)
     except Exception:
@@ -69,7 +68,6 @@ def load_data():
     if '日時' in df.columns:
         df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
-    # 列名の正規化
     if "試合場所" in df.columns:
         df = df.rename(columns={"試合場所": "対戦場所"})
     elif "対戦場所" not in df.columns:
@@ -82,24 +80,26 @@ def load_data():
     return df
 
 def add_new_row_strictly_at_blank_top(new_data_dict):
-    """【抜本改善】記載済み行のすぐ下の行（空きセル最上部）に登録する"""
+    """【抜本修正】記載済み行のすぐ下の行（空きセル最上部）に登録する"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # 1. 全セルを取得し、値が入っている「本当の最終行」を判定
+        # 全データ取得
         all_values = ws.get_all_values()
+        
+        # 実際に値が入っている最後の行番号を特定する
         actual_last_row = 0
         for i, row in enumerate(all_values):
             if any(cell.strip() for cell in row):
-                actual_last_row = i + 1 
+                actual_last_row = i + 1 # 1から始まる行番号
         
-        # 2. Noの自動採番
+        # 新しいNoの採番
         existing_nos = [int(row[0]) for row in all_values[1:] if row and str(row[0]).isdigit()]
         new_no = max(existing_nos + [0]) + 1
         
-        # 3. 書き込み用リストの作成
+        # 登録データの作成
         row_values = []
         for col in SHEET_COLUMNS:
             if col == "No": val = new_no
@@ -108,9 +108,9 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
         
-        # 4. 【抜本修正】append_rowを使わず、指定した行番号(最終行+1)に直接書き込み
+        # 【抜本修正】「本当の最終行」の1個下の行へ、直接範囲指定して更新する
         target_row = actual_last_row + 1
-        ws.update(range_name=f"A{target_row}", values=[row_values])
+        ws.update(f"A{target_row}", [row_values])
         return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
@@ -136,7 +136,7 @@ def delete_selected_rows(nos_to_delete):
         st.error(f"削除エラー: {e}")
         return False
 
-# --- 削除確認ダイアログ ---
+# --- 削除確認ポップアップ ---
 @st.dialog("試合データの削除確認")
 def delete_confirm_dialog(nos):
     st.warning(f"⚠️ 選択された {len(nos)} 件のデータを削除します。")
@@ -150,6 +150,7 @@ def delete_confirm_dialog(nos):
                 st.session_state.df_list = load_data()
                 st.rerun()
     with c2:
+        # キャンセルボタンの修正：エディタの状態を消してリロード
         if st.button("キャンセル", use_container_width=True):
             if "main_editor" in st.session_state:
                 del st.session_state["main_editor"]
@@ -177,9 +178,8 @@ if not is_authenticated:
             st.rerun()
     st.stop()
 
-# --- 4. 画面遷移ロジック ---
+# --- 4. 画面遷移 ---
 
-# 写真管理画面
 if st.session_state.media_no is not None:
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
@@ -214,7 +214,6 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data'])
                     if cell: ws_media.delete_rows(cell.row); st.rerun()
 
-# 結果入力画面
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
@@ -235,7 +234,6 @@ elif st.session_state.selected_no is not None:
                 all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
 
-# 新規登録画面
 elif st.session_state.page == "create":
     st.title("➕ 新規試合登録")
     if st.button("← 戻る"): st.session_state.page = "list"; st.rerun()
@@ -249,11 +247,10 @@ elif st.session_state.page == "create":
         c_memo = st.text_area("備考")
         if st.form_submit_button("試合管理一覧へ登録"):
             new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
-            # 空きセルの最上部に直接追記
+            # 空きセルの最上部へ登録
             if add_new_row_strictly_at_blank_top(new_data):
                 st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
-# メイン一覧画面
 else:
     st.title("⚽ KSC試合管理一覧")
     if st.button("➕ 新規試合登録", use_container_width=True):
@@ -286,7 +283,6 @@ else:
         use_container_width=True, key="main_editor"
     )
 
-    # 行選択監視
     nos_to_delete = []
     for i in range(len(edited_df)):
         edit_row = edited_df.iloc[i]
