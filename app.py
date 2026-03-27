@@ -80,11 +80,15 @@ def add_new_row_at_bottom(new_data_dict):
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # 保存済みデータの最終行を特定してNoを採番
-        all_vals = ws.get_all_values()
-        # 空行を除外して最後のNoを取得
-        valid_rows = [row for row in all_vals if any(field.strip() for field in row)]
-        existing_nos = [int(row[0]) for row in valid_rows[1:] if str(row[0]).isdigit()]
+        # 全データ取得して「本当の最終行」を判定
+        all_values = ws.get_all_values()
+        last_row_index = 0
+        for i, row in enumerate(all_values):
+            if any(cell.strip() for cell in row):
+                last_row_index = i + 1
+        
+        # Noの採番（入力がある行の中から最大値を探す）
+        existing_nos = [int(row[0]) for row in all_values[1:] if row and str(row[0]).isdigit()]
         new_no = max(existing_nos + [0]) + 1
         
         row_values = []
@@ -95,8 +99,9 @@ def add_new_row_at_bottom(new_data_dict):
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
         
-        # 保存済み行のすぐ下一列（空行の先頭）に登録
-        ws.append_row(row_values, value_input_option='RAW')
+        # 保存済み行のすぐ下の行（空白セルの最上部）に書き込み
+        target_row = last_row_index + 1
+        ws.update(f"A{target_row}", [row_values])
         return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
@@ -134,7 +139,7 @@ def delete_confirm_dialog(nos):
                 st.session_state.df_list = load_data()
                 st.rerun()
     with c2:
-        # キャンセルボタンが機能するように修正
+        # キャンセルをクリック可能にし、ダイアログを閉じる
         if st.button("キャンセル", use_container_width=True):
             st.rerun()
 
@@ -264,7 +269,7 @@ else:
         use_container_width=True, key="main_editor"
     )
 
-    # 選択チェックを検知してダイアログを表示
+    # 選択状況をリアルタイム監視してダイアログを起動
     nos_to_delete = []
     for i in range(len(edited_df)):
         edit_row = edited_df.iloc[i]
