@@ -50,11 +50,16 @@ def load_data():
     sh = client.open_by_url(SPREADSHEET_URL)
     ws_list = sh.get_worksheet(0)
     try:
-        data = ws_list.get_all_records()
+        # 見かけ上の空行を除外して読み込む
+        all_values = ws_list.get_all_values()
+        if not all_values:
+            return pd.DataFrame(columns=SHEET_COLUMNS)
+        
+        header = all_values[0]
+        rows = [r for r in all_values[1:] if any(cell.strip() for cell in r)]
+        df = pd.DataFrame(rows, columns=header)
     except Exception:
-        data = []
-    
-    df = pd.DataFrame(data) if data else pd.DataFrame(columns=SHEET_COLUMNS)
+        df = pd.DataFrame(columns=SHEET_COLUMNS)
     
     if "競技分類" not in df.columns: df["競技分類"] = "サッカー"
     df["競技分類"] = df["競技分類"].replace("", "サッカー")
@@ -74,15 +79,25 @@ def load_data():
     
     return df
 
-def add_new_row_at_bottom(new_data_dict):
+def add_new_row_strictly_at_blank_top(new_data_dict):
+    """【抜本修正】記載済み行のすぐ下の行（空きセル最上部）に登録する"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        all_vals = ws.get_all_values()
-        existing_nos = [int(row[0]) for row in all_vals[1:] if row and str(row[0]).isdigit()]
+        
+        # 全セルを取得して、実際に値が入っている「本当の最終行」を探す
+        all_values = ws.get_all_values()
+        actual_last_row = 0
+        for i, row in enumerate(all_values):
+            if any(cell.strip() for cell in row):
+                actual_last_row = i + 1 # 1-indexed
+        
+        # Noの採番（既存データから最大値を取得）
+        existing_nos = [int(row[0]) for row in all_values[1:] if row and str(row[0]).isdigit()]
         new_no = max(existing_nos + [0]) + 1
         
+        # 書き込みデータの作成
         row_values = []
         for col in SHEET_COLUMNS:
             if col == "No": val = new_no
@@ -91,7 +106,9 @@ def add_new_row_at_bottom(new_data_dict):
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
         
-        ws.append_row(row_values)
+        # 実際にデータがある行の「1個下の行」へ書き込み
+        target_row = actual_last_row + 1
+        ws.update(range_name=f"A{target_row}", values=[row_values])
         return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
@@ -117,7 +134,7 @@ def delete_selected_rows(nos_to_delete):
         st.error(f"削除エラー: {e}")
         return False
 
-# --- 削除確認ポップアップ (抜本的修正) ---
+# --- 削除確認ポップアップ (抜本修正) ---
 @st.dialog("試合データの削除確認")
 def delete_confirm_dialog(nos):
     st.warning(f"⚠️ 選択された {len(nos)} 件のデータを削除します。よろしいですか？")
@@ -126,13 +143,13 @@ def delete_confirm_dialog(nos):
     with c1:
         if st.button("はい、削除する", type="primary", use_container_width=True):
             if delete_selected_rows(nos):
-                # 削除成功後、エディタの状態をクリアしてリロード
+                # 状態をクリアしてリロード
                 if "main_editor" in st.session_state:
                     del st.session_state["main_editor"]
                 st.session_state.df_list = load_data()
                 st.rerun()
     with c2:
-        # キャンセルボタン: セッション上のエディタ選択状態を強制削除してリロード
+        # 【抜本修正】キャンセル時にエディタの選択状態を破棄して強制リロード
         if st.button("キャンセル", use_container_width=True):
             if "main_editor" in st.session_state:
                 del st.session_state["main_editor"]
@@ -229,7 +246,8 @@ elif st.session_state.page == "create":
         c_memo = st.text_area("備考")
         if st.form_submit_button("試合管理一覧へ登録"):
             new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
-            if add_new_row_at_bottom(new_data):
+            # 空きセルの最上部に追記
+            if add_new_row_strictly_at_blank_top(new_data):
                 st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
 else:
@@ -252,7 +270,6 @@ else:
     
     current_df = df[display_cols].reset_index(drop=True)
     
-    # 選択チェックを監視
     edited_df = st.data_editor(
         current_df, hide_index=True, 
         column_config={
@@ -280,7 +297,6 @@ else:
             st.session_state.media_no = original_no
             st.rerun()
 
-    # 選択されていたらポップアップ表示
     if nos_to_delete:
         delete_confirm_dialog(nos_to_delete)
 
