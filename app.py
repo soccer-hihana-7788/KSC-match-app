@@ -78,45 +78,52 @@ def update_row(actual_index, updated_row_series):
         st.error(f"保存エラー: {e}")
 
 # --- 3. 抜本的スクロール固定 & 6時間ログイン維持 ---
-# 選択肢変更時の強制リセットをCSSとJSの両面から封じ込めます
+# 強力なスクロールガード
 st.markdown("""
     <style>
-    html { scroll-behavior: auto !important; }
+    html { 
+        scroll-behavior: auto !important;
+        overscroll-behavior: none;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 persistence_js = """
 <script>
     const AUTH_KEY = 'ksc_auth_expiry';
-    const SCROLL_KEY = 'ksc_scroll_pos_v4';
+    const SCROLL_KEY = 'ksc_scroll_pos_v5';
     
-    // 強制的にスクロール位置を固定する関数
-    function forceScroll() {
+    function applyScroll() {
         const savedPos = window.localStorage.getItem(SCROLL_KEY);
         if (savedPos) {
             const y = parseInt(savedPos);
-            const parent = window.parent;
-            
-            // 描画サイクルに合わせて複数回実行
-            parent.scrollTo(0, y);
-            requestAnimationFrame(() => parent.scrollTo(0, y));
-            setTimeout(() => parent.scrollTo(0, y), 50);
-            setTimeout(() => parent.scrollTo(0, y), 150);
-            setTimeout(() => parent.scrollTo(0, y), 500);
+            const p = window.parent;
+            // セレクトボックス変更時の長時間リセットに対抗するため、多重に実行
+            p.scrollTo(0, y);
+            setTimeout(() => p.scrollTo(0, y), 10);
+            setTimeout(() => p.scrollTo(0, y), 50);
+            setTimeout(() => p.scrollTo(0, y), 200);
+            setTimeout(() => p.scrollTo(0, y), 500);
+            setTimeout(() => p.scrollTo(0, y), 1000);
         }
     }
 
-    // スクロール位置の記録
+    // スクロール位置の常時記録
     window.parent.addEventListener('scroll', () => {
-        if (window.parent.scrollY > 0) {
-            window.localStorage.setItem(SCROLL_KEY, window.parent.scrollY);
+        const currentY = window.parent.scrollY;
+        if (currentY > 0) {
+            window.localStorage.setItem(SCROLL_KEY, currentY);
         }
     }, { passive: true });
 
-    // 起動・再読み込み時に実行
-    forceScroll();
+    // 描画サイクルに合わせて実行
+    if (document.readyState === 'complete') {
+        applyScroll();
+    } else {
+        window.addEventListener('load', applyScroll);
+    }
 
-    // 認証チェック
+    // 認証チェック (6時間維持)
     function checkAuth() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
@@ -169,6 +176,7 @@ if 'media_no' not in st.session_state: st.session_state.media_no = None
 
 def on_data_change():
     changes = st.session_state["editor"]
+    # 編集が行われた際、即座に現在の位置を保存するよう指示（JS側と連携）
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
         if edit_values.get("結果入力") is True:
