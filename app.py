@@ -51,14 +51,13 @@ def load_data():
     elif "対戦場所" not in df.columns:
         df["対戦場所"] = ""
 
-    # UI用制御列
     df.insert(0, '選択', False)
     df['結果入力'] = False
     df['写真管理'] = False
     
     return df
 
-def add_new_row_at_top(new_data_dict):
+def add_new_row_at_bottom(new_data_dict):
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
@@ -73,7 +72,9 @@ def add_new_row_at_top(new_data_dict):
             else: val = new_data_dict.get(col, "")
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
-        ws.insert_row(row_values, 2)
+        
+        # 仕様変更：リストの最後（空白行の最初）に追加
+        ws.append_row(row_values)
         return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
@@ -84,13 +85,36 @@ def delete_selected_rows(nos_to_delete):
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        for no in sorted(nos_to_delete, reverse=True):
-            cell = ws.find(str(no), in_col=1)
-            if cell: ws.delete_rows(cell.row)
+        # 行番号のズレを防ぐため、スプレッドシートの全データを取得して検索
+        all_rows = ws.get_all_values()
+        
+        # 削除対象のNoが含まれる行番号（スプレッドシート上の行）を特定
+        rows_to_delete = []
+        for i, row in enumerate(all_rows):
+            if i == 0: continue # ヘッダー
+            if row[0].isdigit() and int(row[0]) in nos_to_delete:
+                rows_to_delete.append(i + 1)
+        
+        # 下の行から順に削除（行番号の変化を防ぐ）
+        for row_idx in sorted(rows_to_delete, reverse=True):
+            ws.delete_rows(row_idx)
         return True
     except Exception as e:
         st.error(f"削除エラー: {e}")
         return False
+
+# --- 削除確認ポップアップ ---
+@st.dialog("データの削除確認")
+def confirm_delete_dialog(nos):
+    st.warning(f"選択された {len(nos)} 件の試合データを削除します。この操作は取り消せません。")
+    if st.button("はい、削除します", type="primary", use_container_width=True):
+        if delete_selected_rows(nos):
+            st.success("削除が完了しました。")
+            time.sleep(1)
+            st.session_state.df_list = load_data()
+            st.rerun()
+    if st.button("キャンセル", use_container_width=True):
+        st.rerun()
 
 # --- 3. 状態管理 ---
 if 'df_list' not in st.session_state:
@@ -181,9 +205,9 @@ elif st.session_state.page == "create":
         c_loc = st.text_input("対戦場所")
         c_class = st.text_input("試合分類")
         c_memo = st.text_area("備考")
-        if st.form_submit_button("登録して保存"):
+        if st.form_submit_button("登録して下部へ保存"):
             new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
-            if add_new_row_at_top(new_data):
+            if add_new_row_at_bottom(new_data):
                 st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
 else:
@@ -201,7 +225,6 @@ else:
     if search_query:
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # 制御に必要な 'No' を確実に含める
     display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
     display_cols = [c for c in display_cols if c in df.columns]
     
@@ -214,7 +237,7 @@ else:
             "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"),
             "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
             "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"),
-            "No": None # UI上では非表示にする
+            "No": None
         }, 
         use_container_width=True, key="main_editor"
     )
@@ -222,7 +245,6 @@ else:
     nos_to_delete = []
     for i in range(len(edited_df)):
         edit_row = edited_df.iloc[i]
-        # current_df から安全に No を取得
         original_no = int(current_df.iloc[i]["No"])
         
         if edit_row.get("選択") == True:
@@ -235,15 +257,12 @@ else:
             st.rerun()
 
     if nos_to_delete:
-        st.warning(f"{len(nos_to_delete)}件選択中")
-        if st.button("🗑️ 選択した行を削除する", type="primary"):
-            if delete_selected_rows(nos_to_delete):
-                st.session_state.df_list = load_data()
-                st.rerun()
+        st.error(f"⚠️ {len(nos_to_delete)} 件のデータが選択されています。")
+        if st.button("🗑️ 選択した行を削除する", type="primary", use_container_width=True):
+            confirm_delete_dialog(nos_to_delete)
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
-        # 印刷用からは制御列を除外
         print_cols = [c for c in display_cols if c not in ['選択', '結果入力', '写真管理', 'No']]
         print_df = current_df[print_cols]
         html_table = print_df.to_html(index=False)
