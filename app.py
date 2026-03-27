@@ -36,124 +36,65 @@ def load_data():
     except Exception:
         data = []
     
-    if not data:
-        df = pd.DataFrame(columns=SHEET_COLUMNS)
-    else:
-        df = pd.DataFrame(data)
-        if "競技分類" not in df.columns:
-            df.insert(3, "競技分類", "サッカー")
-        df["競技分類"] = df["競技分類"].replace("", "サッカー")
-
-    if 'No' in df.columns: 
-        df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
-    if '日時' in df.columns: 
-        df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
+    df = pd.DataFrame(data) if data else pd.DataFrame(columns=SHEET_COLUMNS)
+    
+    if "競技分類" not in df.columns: df.insert(3, "競技分類", "サッカー")
+    df["競技分類"] = df["競技分類"].replace("", "サッカー")
+    if 'No' in df.columns: df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
+    if '日時' in df.columns: df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
     
     df['結果入力'] = False
     df['写真管理'] = False
     
     if "試合場所" in df.columns:
         df = df.rename(columns={"試合場所": "対戦場所"})
-    
     return df
 
-def update_row(actual_index, updated_row_series):
+def add_new_row(new_data_dict):
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
+        
+        # 新しいNoの採番
+        existing_nos = ws.col_values(1)[1:]
+        new_no = max([int(n) for n in existing_nos if n.isdigit()] + [0]) + 1
+        
         row_values = []
-        save_data = updated_row_series.copy()
-        if "対戦場所" in save_data:
-            save_data["試合場所"] = save_data["対戦場所"]
-
         for col in SHEET_COLUMNS:
-            val = save_data.get(col, "")
-            if col == "日時" and hasattr(val, 'isoformat'): val = val.isoformat()
-            elif isinstance(val, (np.integer, np.int64)): val = int(val)
-            elif pd.isna(val): val = ""
+            if col == "No": val = new_no
+            elif col == "試合場所": val = new_data_dict.get("対戦場所", "")
+            else: val = new_data_dict.get(col, "")
+            
+            if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
-        ws.update(f"A{actual_index + 2}", [row_values])
+            
+        ws.append_row(row_values)
+        return True
     except Exception as e:
         st.error(f"保存エラー: {e}")
+        return False
 
-# --- 3. 【究極・最終版】スクロール・アンカー・システム ---
-st.markdown("""
-    <style>
-    /* CSSによる物理的スクロール制限 */
-    html, body { 
-        scroll-behavior: auto !important; 
-        overscroll-behavior-y: none !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-final_absolute_lock_js = """
+# --- 3. 認証・ログイン制御 ---
+auth_js = """
 <script>
-    const STORAGE_KEY = 'ksc_scroll_lock_final';
-    const p = window.parent;
-
-    // スクロール座標を「常に」localStorageに最新状態で書き込み続ける
-    p.addEventListener('scroll', () => {
-        if (p.scrollY > 0) {
-            window.localStorage.setItem(STORAGE_KEY, p.scrollY);
-        }
-    }, { passive: true });
-
-    // 強制引き戻しループ（保存完了後の5秒間、あらゆる「跳ね上がり」をミリ秒単位で修正）
-    function executeUltimateLock() {
-        const savedPos = window.localStorage.getItem(STORAGE_KEY);
-        if (!savedPos) return;
-        
-        const targetY = parseInt(savedPos);
-        const startTime = Date.now();
-
-        // 1ミリ秒周期（事実上の常時監視）で座標を固定
-        const anchorTimer = setInterval(() => {
-            if (p.scrollY !== targetY) {
-                p.scrollTo(0, targetY);
-            }
-            if (Date.now() - startTime > 5000) {
-                clearInterval(anchorTimer);
-            }
-        }, 1);
-
-        // 描画サイクルに同期した補正
-        function syncLock() {
-            p.scrollTo(0, targetY);
-            if (Date.now() - startTime < 5000) {
-                requestAnimationFrame(syncLock);
-            }
-        }
-        syncLock();
-    }
-
-    // 認証チェック & ページ読み込み完了時の即時発動
     const AUTH_KEY = 'ksc_auth_expiry';
-    function init() {
+    const p = window.parent;
+    function check() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
         const url = new URL(p.location.href);
-        const hasAuth = url.searchParams.get('auth') === 'true';
-
         if (expiry && Number(expiry) < now) {
             window.localStorage.removeItem(AUTH_KEY);
-            if (hasAuth) { url.searchParams.delete('auth'); p.location.href = url.href; }
-            return;
+            if (url.searchParams.get('auth') === 'true') {
+                url.searchParams.delete('auth'); p.location.href = url.href;
+            }
         }
-        if (expiry && Number(expiry) > now && !hasAuth) {
-            url.searchParams.set('auth', 'true'); p.location.href = url.href;
-            return;
-        }
-        
-        // 保存（Rerun）が走った瞬間にロックを開始
-        if (hasAuth) executeUltimateLock();
     }
-
-    init();
+    check();
 </script>
 """
-components.html(final_absolute_lock_js, height=0)
+components.html(auth_js, height=0)
 
 is_authenticated = st.query_params.get("auth") == "true"
 
@@ -171,33 +112,20 @@ if not is_authenticated:
             st.error("IDまたはパスワードが違います")
     st.stop()
 
-# --- 4. データ管理 ---
+# --- 4. 状態管理 ---
 if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
+if 'page' not in st.session_state: st.session_state.page = "list"
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
 
-def on_data_change():
-    changes = st.session_state["editor"]
-    for row_idx, edit_values in changes["edited_rows"].items():
-        actual_index = st.session_state.current_display_df.index[row_idx]
-        
-        if edit_values.get("結果入力") is True:
-            st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
-            return
-        if edit_values.get("写真管理") is True:
-            st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
-            return
-            
-        for col, val in edit_values.items():
-            if col not in ["結果入力", "写真管理"]:
-                st.session_state.df_list.at[actual_index, col] = val
-        update_row(actual_index, st.session_state.df_list.iloc[actual_index])
+# --- 5. 画面切り替えロジック ---
 
-# --- 5. 画面制御 ---
+# A. 写真管理画面
 if st.session_state.media_no is not None:
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.media_no = None; st.rerun()
+    # (既存の写真管理ロジック)
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_media = sh.worksheet("media_storage")
     except: ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3"); ws_media.append_row(["match_no", "filename", "base64_data"])
@@ -216,10 +144,12 @@ if st.session_state.media_no is not None:
                 st.image(base64.b64decode(item['base64_data']), use_container_width=True)
                 if st.button("削除", key=f"del_{idx}"): cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
+# B. 試合結果入力画面
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; st.rerun()
+    # (既存の結果入力ロジック)
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
     except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
@@ -236,8 +166,37 @@ elif st.session_state.selected_no is not None:
                 all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
 
+# C. 新規作成画面
+elif st.session_state.page == "create":
+    st.title("➕ 新規試合登録")
+    if st.button("← 戻る"): st.session_state.page = "list"; st.rerun()
+    
+    with st.form("create_form"):
+        c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"])
+        c_date = st.date_input("日時", value=date.today())
+        c_type = st.selectbox("競技分類", ["サッカー", "フットサル"])
+        c_opp = st.text_input("対戦相手")
+        c_loc = st.text_input("対戦場所")
+        c_class = st.text_input("試合分類")
+        c_memo = st.text_area("備考")
+        
+        if st.form_submit_button("この内容で登録する"):
+            new_data = {
+                "カテゴリー": c_cat, "日時": c_date, "競技分類": c_type,
+                "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo
+            }
+            if add_new_row(new_data):
+                st.success("登録しました"); st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
+
+# D. メイン一覧画面
 else:
     st.title("⚽ KSC試合管理一覧")
+    
+    # 新規作成ボタンを検索の上部に配置
+    if st.button("➕ 新規試合登録", use_container_width=True):
+        st.session_state.page = "create"
+        st.rerun()
+        
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
     with c2: cat_filter = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
@@ -247,23 +206,35 @@ else:
     if search_query: df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
     display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
-    st.session_state.current_display_df = df[[c for c in display_cols if c in df.columns]]
+    current_df = df[[c for c in display_cols if c in df.columns]]
     
-    st.data_editor(
-        st.session_state.current_display_df, hide_index=True, 
+    # 横スクロールを確保しつつデータ表示（編集不可にし、チェックボックスによる遷移のみに限定）
+    edited_df = st.data_editor(
+        current_df, 
+        hide_index=True, 
         column_config={
             "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"),
             "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
-            "競技分類": st.column_config.SelectboxColumn("競技分類", options=["サッカー", "フットサル"]),
-            "カテゴリー": st.column_config.SelectboxColumn("カテゴリー", options=["U8", "U9", "U10", "U11", "U12"]),
             "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
         }, 
-        use_container_width=True, key="editor", on_change=on_data_change
+        use_container_width=True, # これにより右端までしっかり表示・スクロール可能に
+        key="main_editor"
     )
+
+    # チェックボックスが押されたら画面遷移
+    for idx, row in edited_df.iterrows():
+        if row["結果入力"]:
+            actual_no = df.iloc[idx]["No"]
+            st.session_state.selected_no = int(actual_no)
+            st.rerun()
+        if row["写真管理"]:
+            actual_no = df.iloc[idx]["No"]
+            st.session_state.media_no = int(actual_no)
+            st.rerun()
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
         cols_to_print = [c for c in display_cols if c not in ['結果入力', '写真管理']]
-        print_df = st.session_state.current_display_df[cols_to_print]
+        print_df = current_df[cols_to_print]
         html_table = print_df.to_html(index=False, classes='print-table')
         components.html(f"<html><head><style>.print-table {{ border-collapse: collapse; width: 100%; }} .print-table th, .print-table td {{ border: 1px solid black; padding: 8px; }}</style></head><body>{html_table}<script>setTimeout(()=>{{window.print()}},500)</script></body></html>", height=0)
