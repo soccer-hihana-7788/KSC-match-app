@@ -77,67 +77,58 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 抜本的対策：スクロール強制固定スクリプト ---
+# --- 3. 抜本的スクロール固定（5秒間強制ホールド） ---
 st.markdown("""
     <style>
-    html { 
-        scroll-behavior: auto !important;
-        overscroll-behavior-y: none !important;
-    }
+    html { scroll-behavior: auto !important; overscroll-behavior-y: none !important; }
     </style>
 """, unsafe_allow_html=True)
 
 persistence_js = """
 <script>
-    const SCROLL_KEY = 'ksc_scroll_lock_v6';
+    const SC_KEY = 'ksc_pos_v7';
     const p = window.parent;
 
-    // 現在のスクロール位置を常に監視して保存
+    // スクロール位置を常時記録
     p.addEventListener('scroll', () => {
-        if (p.scrollY > 0) {
-            window.localStorage.setItem(SCROLL_KEY, p.scrollY);
-        }
+        if (p.scrollY > 0) window.localStorage.setItem(SC_KEY, p.scrollY);
     }, { passive: true });
 
-    // スクロールを「死守」する関数
-    function holdScrollPosition() {
-        const saved = window.localStorage.getItem(SCROLL_KEY);
+    // 強制位置固定：5秒間、極小スパンで今の位置を死守する
+    function lockNow() {
+        const saved = window.localStorage.getItem(SC_KEY);
         if (!saved) return;
-        
         const targetY = parseInt(saved);
-        // 3秒間、5ミリ秒おきに強制スクロールをかけ続け、Streamlitのリセット命令を全て叩き潰す
-        let startTime = Date.now();
+        let start = Date.now();
         const timer = setInterval(() => {
             p.scrollTo(0, targetY);
-            if (Date.now() - startTime > 3000) {
-                clearInterval(timer);
-            }
-        }, 5);
+            if (Date.now() - start > 5000) clearInterval(timer);
+        }, 10);
     }
 
-    // 認証チェックと初期化
-    function init() {
-        const AUTH_KEY = 'ksc_auth_expiry';
+    // ページ更新時に呼び出し
+    if (window.name !== 'ksc_reloading') {
+        lockNow();
+    }
+
+    // 認証と初期化
+    const AUTH_KEY = 'ksc_auth_expiry';
+    function check() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
         const url = new URL(p.location.href);
-        const hasAuth = url.searchParams.get('auth') === 'true';
-
         if (expiry && Number(expiry) < now) {
             window.localStorage.removeItem(AUTH_KEY);
-            if (hasAuth) { url.searchParams.delete('auth'); p.location.href = url.href; }
+            if (url.searchParams.get('auth') === 'true') {
+                url.searchParams.delete('auth'); p.location.href = url.href;
+            }
             return;
         }
-        if (expiry && Number(expiry) > now && !hasAuth) {
+        if (expiry && Number(expiry) > now && url.searchParams.get('auth') !== 'true') {
             url.searchParams.set('auth', 'true'); p.location.href = url.href;
-            return;
         }
-        
-        // 再描画時に実行
-        holdScrollPosition();
     }
-
-    init();
+    check();
 </script>
 """
 components.html(persistence_js, height=0)
@@ -152,12 +143,7 @@ if not is_authenticated:
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
             st.query_params["auth"] = "true"
-            components.html(f"""
-                <script>
-                    window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
-                    window.parent.location.reload();
-                </script>
-            """, height=0)
+            components.html(f"<script>window.localStorage.setItem('ksc_auth_expiry', '{expiry}'); window.parent.location.reload();</script>", height=0)
             st.stop()
         else:
             st.error("IDまたはパスワードが違います")
@@ -172,14 +158,12 @@ def on_data_change():
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
-        
         if edit_values.get("結果入力") is True:
             st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
         if edit_values.get("写真管理") is True:
             st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
-            
         for col, val in edit_values.items():
             if col not in ["結果入力", "写真管理"]:
                 st.session_state.df_list.at[actual_index, col] = val
@@ -187,6 +171,7 @@ def on_data_change():
 
 # --- 5. 画面制御 ---
 if st.session_state.media_no is not None:
+    # 写真管理画面
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.media_no = None; st.rerun()
@@ -196,12 +181,10 @@ if st.session_state.media_no is not None:
     uploaded_file = st.file_uploader("スマホ写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード実行"):
         with st.spinner("画像を圧縮中..."):
-            try:
-                img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
-                buf = BytesIO(); img.thumbnail((350, 350)); img.save(buf, format="JPEG", quality=35, optimize=True)
-                encoded = base64.b64encode(buf.getvalue()).decode()
-                ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
-            except Exception as e: st.error(f"失敗: {e}")
+            img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
+            buf = BytesIO(); img.thumbnail((350, 350)); img.save(buf, format="JPEG", quality=35, optimize=True)
+            encoded = base64.b64encode(buf.getvalue()).decode()
+            ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("保存完了"); st.rerun()
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
         cols = st.columns(3)
@@ -211,6 +194,7 @@ if st.session_state.media_no is not None:
                 if st.button("削除", key=f"del_{idx}"): cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
+    # 結果入力画面
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; st.rerun()
@@ -220,18 +204,18 @@ elif st.session_state.selected_no is not None:
     res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
     for i in range(1, 11):
         rk = f"res_{no}_{i}"; sd = all_results.get(rk, {"score": " - ", "scorers": [""], "result": ""})
-        cur_score = sd.get("score", " - "); parts = cur_score.split("-")
-        with st.expander(f"第 {i} 試合: {cur_score} {sd.get('result', '')}"):
+        with st.expander(f"第 {i} 試合: {sd.get('score', ' - ')} {sd.get('result', '')}"):
             res_val = st.radio("結果", ["勝ち", "負け", "引き分け"], index=["勝ち", "負け", "引き分け"].index(sd.get('result', '勝ち')) if sd.get('result') in ["勝ち", "負け", "引き分け"] else 0, horizontal=True, key=f"rad_{rk}")
             sc_col1, sc_col2 = st.columns(2)
-            new_l = sc_col1.text_input("自", value=parts[0].strip() if len(parts)>0 else "", key=f"l_{rk}")
-            new_r = sc_col2.text_input("相手", value=parts[1].strip() if len(parts)>1 else "", key=f"r_{rk}")
+            new_l = sc_col1.text_input("自", value=sd.get('score','-').split('-')[0].strip(), key=f"l_{rk}")
+            new_r = sc_col2.text_input("相手", value=sd.get('score','-').split('-')[1].strip() if '-' in sd.get('score','') else "", key=f"r_{rk}")
             sc_input = st.text_area("得点者", value=", ".join(sd.get("scorers", [])), key=f"txt_{rk}")
             if st.button("保存", key=f"btn_{rk}"):
                 all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
 
 else:
+    # メイン一覧
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
