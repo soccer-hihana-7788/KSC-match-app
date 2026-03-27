@@ -77,58 +77,77 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 抜本的スクロール固定（5秒間強制ホールド） ---
+# --- 3. 抜本的・強制スクロールロック・スクリプト ---
 st.markdown("""
     <style>
-    html { scroll-behavior: auto !important; overscroll-behavior-y: none !important; }
+    /* ブラウザの挙動を物理的に制限 */
+    html, body { 
+        scroll-behavior: auto !important; 
+        overscroll-behavior-y: none !important; 
+    }
     </style>
 """, unsafe_allow_html=True)
 
+# セレクトボックス等の変更時に発生する「跳ね上がり」を、JSが秒間100回の頻度で抑え込みます
 persistence_js = """
 <script>
-    const SC_KEY = 'ksc_pos_v7';
+    const STORAGE_KEY = 'ksc_scroll_lock_fixed';
     const p = window.parent;
 
-    // スクロール位置を常時記録
+    // 現在の座標をリアルタイムで保存
     p.addEventListener('scroll', () => {
-        if (p.scrollY > 0) window.localStorage.setItem(SC_KEY, p.scrollY);
+        if (p.scrollY > 0) {
+            window.localStorage.setItem(STORAGE_KEY, p.scrollY);
+        }
     }, { passive: true });
 
-    // 強制位置固定：5秒間、極小スパンで今の位置を死守する
-    function lockNow() {
-        const saved = window.localStorage.getItem(SC_KEY);
+    // 強制ロック関数：5秒間、あらゆるリセット命令を上書きし続ける
+    function forceLock() {
+        const saved = window.localStorage.getItem(STORAGE_KEY);
         if (!saved) return;
+        
         const targetY = parseInt(saved);
-        let start = Date.now();
-        const timer = setInterval(() => {
+        const startTime = Date.now();
+
+        function apply() {
             p.scrollTo(0, targetY);
-            if (Date.now() - start > 5000) clearInterval(timer);
+            // 描画サイクル(AnimationFrame)とタイマーの両方で二重に固定
+            if (Date.now() - startTime < 5000) {
+                requestAnimationFrame(apply);
+            }
+        }
+        
+        apply(); // 即時開始
+        // 保険としてインターバルでも実行
+        const backupTimer = setInterval(() => {
+            p.scrollTo(0, targetY);
+            if (Date.now() - startTime > 5000) clearInterval(backupTimer);
         }, 10);
     }
 
-    // ページ更新時に呼び出し
-    if (window.name !== 'ksc_reloading') {
-        lockNow();
-    }
-
-    // 認証と初期化
+    // 認証管理
     const AUTH_KEY = 'ksc_auth_expiry';
-    function check() {
+    function handleAuthAndScroll() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
         const url = new URL(p.location.href);
+        const hasAuth = url.searchParams.get('auth') === 'true';
+
         if (expiry && Number(expiry) < now) {
             window.localStorage.removeItem(AUTH_KEY);
-            if (url.searchParams.get('auth') === 'true') {
-                url.searchParams.delete('auth'); p.location.href = url.href;
-            }
+            if (hasAuth) { url.searchParams.delete('auth'); p.location.href = url.href; }
             return;
         }
-        if (expiry && Number(expiry) > now && url.searchParams.get('auth') !== 'true') {
+        if (expiry && Number(expiry) > now && !hasAuth) {
             url.searchParams.set('auth', 'true'); p.location.href = url.href;
+            return;
         }
+        
+        // 再描画時、強制ロックを即座に発動
+        if (hasAuth) forceLock();
     }
-    check();
+
+    handleAuthAndScroll();
 </script>
 """
 components.html(persistence_js, height=0)
@@ -143,7 +162,12 @@ if not is_authenticated:
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
             st.query_params["auth"] = "true"
-            components.html(f"<script>window.localStorage.setItem('ksc_auth_expiry', '{expiry}'); window.parent.location.reload();</script>", height=0)
+            components.html(f"""
+                <script>
+                    window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
+                    window.parent.location.reload();
+                </script>
+            """, height=0)
             st.stop()
         else:
             st.error("IDまたはパスワードが違います")
@@ -158,12 +182,14 @@ def on_data_change():
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
+        
         if edit_values.get("結果入力") is True:
             st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
         if edit_values.get("写真管理") is True:
             st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
+            
         for col, val in edit_values.items():
             if col not in ["結果入力", "写真管理"]:
                 st.session_state.df_list.at[actual_index, col] = val
@@ -171,7 +197,6 @@ def on_data_change():
 
 # --- 5. 画面制御 ---
 if st.session_state.media_no is not None:
-    # 写真管理画面
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.media_no = None; st.rerun()
@@ -194,7 +219,6 @@ if st.session_state.media_no is not None:
                 if st.button("削除", key=f"del_{idx}"): cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
-    # 結果入力画面
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; st.rerun()
@@ -215,7 +239,6 @@ elif st.session_state.selected_no is not None:
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
 
 else:
-    # メイン一覧
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
