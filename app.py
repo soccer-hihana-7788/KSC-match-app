@@ -80,15 +80,15 @@ def add_new_row_at_bottom(new_data_dict):
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # 全データ取得して「本当の最終行」を判定
-        all_values = ws.get_all_values()
-        last_row_index = 0
-        for i, row in enumerate(all_values):
+        # 保存済みデータの最終行を特定
+        all_vals = ws.get_all_values()
+        last_row = 0
+        for i, row in enumerate(all_vals):
             if any(cell.strip() for cell in row):
-                last_row_index = i + 1
+                last_row = i + 1
         
-        # Noの採番（入力がある行の中から最大値を探す）
-        existing_nos = [int(row[0]) for row in all_values[1:] if row and str(row[0]).isdigit()]
+        # 新しいNoの採番
+        existing_nos = [int(row[0]) for row in all_vals[1:] if row and str(row[0]).isdigit()]
         new_no = max(existing_nos + [0]) + 1
         
         row_values = []
@@ -99,8 +99,8 @@ def add_new_row_at_bottom(new_data_dict):
             if isinstance(val, date): val = val.isoformat()
             row_values.append(str(val))
         
-        # 保存済み行のすぐ下の行（空白セルの最上部）に書き込み
-        target_row = last_row_index + 1
+        # 最終行のすぐ下の行（空きセル最上部）へ直接更新
+        target_row = last_row + 1
         ws.update(f"A{target_row}", [row_values])
         return True
     except Exception as e:
@@ -130,7 +130,7 @@ def delete_selected_rows(nos_to_delete):
 # --- 削除確認ポップアップ ---
 @st.dialog("試合データの削除確認")
 def delete_confirm_dialog(nos):
-    st.warning(f"⚠️ 選択された {len(nos)} 件のデータを削除します。よろしいですか？")
+    st.warning(f"⚠️ 選択された {len(nos)} 件のデータを削除します。")
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
@@ -139,7 +139,7 @@ def delete_confirm_dialog(nos):
                 st.session_state.df_list = load_data()
                 st.rerun()
     with c2:
-        # キャンセルをクリック可能にし、ダイアログを閉じる
+        # キャンセルボタンの動作を修正
         if st.button("キャンセル", use_container_width=True):
             st.rerun()
 
@@ -269,7 +269,6 @@ else:
         use_container_width=True, key="main_editor"
     )
 
-    # 選択状況をリアルタイム監視してダイアログを起動
     nos_to_delete = []
     for i in range(len(edited_df)):
         edit_row = edited_df.iloc[i]
