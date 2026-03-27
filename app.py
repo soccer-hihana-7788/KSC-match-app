@@ -1,5 +1,4 @@
 import streamlit as st
-import pd
 import pandas as pd
 import numpy as np
 from datetime import date, datetime, timedelta
@@ -52,7 +51,6 @@ def load_data():
     elif "対戦場所" not in df.columns:
         df["対戦場所"] = ""
 
-    # 制御用列（UI用）
     df.insert(0, '選択', False)
     df['結果入力'] = False
     df['写真管理'] = False
@@ -117,7 +115,6 @@ if not is_authenticated:
 
 # --- 4. 画面遷移 ---
 
-# A. 写真管理
 if st.session_state.media_no is not None:
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
@@ -152,7 +149,6 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data'])
                     if cell: ws_media.delete_rows(cell.row); st.rerun()
 
-# B. 試合結果入力
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
@@ -173,7 +169,6 @@ elif st.session_state.selected_no is not None:
                 all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
 
-# C. 新規作成
 elif st.session_state.page == "create":
     st.title("➕ 新規試合登録")
     if st.button("← 戻る"): st.session_state.page = "list"; st.rerun()
@@ -190,7 +185,6 @@ elif st.session_state.page == "create":
             if add_new_row_at_top(new_data):
                 st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
-# D. 一覧（KeyError改善版）
 else:
     st.title("⚽ KSC試合管理一覧")
     if st.button("➕ 新規試合登録", use_container_width=True):
@@ -206,11 +200,9 @@ else:
     if search_query:
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # 確実に存在する列を抽出
     display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
     display_cols = [c for c in display_cols if c in df.columns]
     
-    # ここが重要：インデックスをリセットしてズレを解消
     current_df = df[display_cols].reset_index(drop=True)
     
     edited_df = st.data_editor(
@@ -225,10 +217,8 @@ else:
     )
 
     nos_to_delete = []
-    # 【最重要】edited_df の全行を安全にチェック
     for i in range(len(edited_df)):
         edit_row = edited_df.iloc[i]
-        # 対応する元のデータの No を取得
         original_no = int(current_df.iloc[i]["No"])
         
         if edit_row.get("選択") == True:
@@ -249,6 +239,7 @@ else:
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
-        print_df = current_df.drop(columns=['選択', '結果入力', '写真管理'])
+        print_cols = [c for c in display_cols if c not in ['選択', '結果入力', '写真管理']]
+        print_df = current_df[print_cols]
         html_table = print_df.to_html(index=False)
         components.html(f"<html><body>{html_table}<script>setTimeout(()=>{{window.print()}},500)</script></body></html>", height=0)
