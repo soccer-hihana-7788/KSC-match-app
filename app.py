@@ -77,57 +77,49 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 抜本的・強制スクロールロック・スクリプト ---
+# --- 3. 抜本的スクロールロック（JSによる強制維持） ---
 st.markdown("""
     <style>
-    /* ブラウザの挙動を物理的に制限 */
-    html, body { 
-        scroll-behavior: auto !important; 
-        overscroll-behavior-y: none !important; 
-    }
+    /* ブラウザの挙動をCSSで物理的に制限 */
+    html { scroll-behavior: auto !important; overscroll-behavior-y: none !important; }
     </style>
 """, unsafe_allow_html=True)
 
-# セレクトボックス等の変更時に発生する「跳ね上がり」を、JSが秒間100回の頻度で抑え込みます
 persistence_js = """
 <script>
-    const STORAGE_KEY = 'ksc_scroll_lock_fixed';
+    const STORAGE_KEY = 'ksc_scroll_lock_fixed_v8';
     const p = window.parent;
 
-    // 現在の座標をリアルタイムで保存
+    // 現在の座標を常に記録
     p.addEventListener('scroll', () => {
-        if (p.scrollY > 0) {
-            window.localStorage.setItem(STORAGE_KEY, p.scrollY);
-        }
+        if (p.scrollY > 0) window.localStorage.setItem(STORAGE_KEY, p.scrollY);
     }, { passive: true });
 
-    // 強制ロック関数：5秒間、あらゆるリセット命令を上書きし続ける
-    function forceLock() {
+    // 強制位置ロック：ページ更新後の5秒間、あらゆる「上に戻る」動きを上書きし続ける
+    function lockPosition() {
         const saved = window.localStorage.getItem(STORAGE_KEY);
         if (!saved) return;
         
         const targetY = parseInt(saved);
         const startTime = Date.now();
 
-        function apply() {
+        // 秒間100回の頻度で現在地を死守
+        const timer = setInterval(() => {
             p.scrollTo(0, targetY);
-            // 描画サイクル(AnimationFrame)とタイマーの両方で二重に固定
-            if (Date.now() - startTime < 5000) {
-                requestAnimationFrame(apply);
-            }
-        }
-        
-        apply(); // 即時開始
-        // 保険としてインターバルでも実行
-        const backupTimer = setInterval(() => {
-            p.scrollTo(0, targetY);
-            if (Date.now() - startTime > 5000) clearInterval(backupTimer);
+            if (Date.now() - startTime > 5000) clearInterval(timer);
         }, 10);
+        
+        // requestAnimationFrameでも二重に固定（よりスムーズな維持のため）
+        function sync() {
+            p.scrollTo(0, targetY);
+            if (Date.now() - startTime < 5000) requestAnimationFrame(sync);
+        }
+        sync();
     }
 
-    // 認証管理
+    // 認証チェック & 初期化
     const AUTH_KEY = 'ksc_auth_expiry';
-    function handleAuthAndScroll() {
+    function init() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
         const url = new URL(p.location.href);
@@ -143,11 +135,11 @@ persistence_js = """
             return;
         }
         
-        // 再描画時、強制ロックを即座に発動
-        if (hasAuth) forceLock();
+        // 再読み込みが発生したら即座にロックを発動
+        if (hasAuth) lockPosition();
     }
 
-    handleAuthAndScroll();
+    init();
 </script>
 """
 components.html(persistence_js, height=0)
@@ -162,12 +154,7 @@ if not is_authenticated:
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
             st.query_params["auth"] = "true"
-            components.html(f"""
-                <script>
-                    window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
-                    window.parent.location.reload();
-                </script>
-            """, height=0)
+            components.html(f"<script>window.localStorage.setItem('ksc_auth_expiry', '{expiry}'); window.parent.location.reload();</script>", height=0)
             st.stop()
         else:
             st.error("IDまたはパスワードが違います")
@@ -182,14 +169,12 @@ def on_data_change():
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
-        
         if edit_values.get("結果入力") is True:
             st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
         if edit_values.get("写真管理") is True:
             st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
-            
         for col, val in edit_values.items():
             if col not in ["結果入力", "写真管理"]:
                 st.session_state.df_list.at[actual_index, col] = val
