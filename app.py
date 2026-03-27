@@ -77,51 +77,52 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 抜本的対策：スクロール絶対固定ロジック & 6時間ログイン ---
+# --- 3. 抜本的対策：スクロール強制固定スクリプト ---
 st.markdown("""
     <style>
-    /* ブラウザの自動スクロールをCSSで物理的に無効化 */
-    html { scroll-behavior: auto !important; }
+    html { 
+        scroll-behavior: auto !important;
+        overscroll-behavior-y: none !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# セレクトボックス変更時の「跳ね上がり」を、JSがミリ秒単位で監視して力ずくで抑え込みます
 persistence_js = """
 <script>
-    const AUTH_KEY = 'ksc_auth_expiry';
-    const SCROLL_KEY = 'ksc_scroll_lock_pos';
-    
+    const SCROLL_KEY = 'ksc_scroll_lock_v6';
     const p = window.parent;
 
-    // 現在の座標を常に記録
+    // 現在のスクロール位置を常に監視して保存
     p.addEventListener('scroll', () => {
         if (p.scrollY > 0) {
             window.localStorage.setItem(SCROLL_KEY, p.scrollY);
         }
     }, { passive: true });
 
-    // スクロールを「現在地」に強制固定するループ関数
-    function enforceScroll() {
+    // スクロールを「死守」する関数
+    function holdScrollPosition() {
         const saved = window.localStorage.getItem(SCROLL_KEY);
-        if (saved) {
-            const targetY = parseInt(saved);
-            // Streamlitの再描画（Rerun）が終わるまで、約2秒間しつこく固定し続ける
-            let startTime = Date.now();
-            const timer = setInterval(() => {
-                p.scrollTo(0, targetY);
-                if (Date.now() - startTime > 2000) clearInterval(timer);
-            }, 10);
-        }
+        if (!saved) return;
+        
+        const targetY = parseInt(saved);
+        // 3秒間、5ミリ秒おきに強制スクロールをかけ続け、Streamlitのリセット命令を全て叩き潰す
+        let startTime = Date.now();
+        const timer = setInterval(() => {
+            p.scrollTo(0, targetY);
+            if (Date.now() - startTime > 3000) {
+                clearInterval(timer);
+            }
+        }, 5);
     }
 
-    // 認証チェック & ページ読み込み時の位置復元
+    // 認証チェックと初期化
     function init() {
+        const AUTH_KEY = 'ksc_auth_expiry';
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
         const url = new URL(p.location.href);
         const hasAuth = url.searchParams.get('auth') === 'true';
 
-        // ログイン維持チェック
         if (expiry && Number(expiry) < now) {
             window.localStorage.removeItem(AUTH_KEY);
             if (hasAuth) { url.searchParams.delete('auth'); p.location.href = url.href; }
@@ -132,8 +133,8 @@ persistence_js = """
             return;
         }
         
-        // 位置復元を実行
-        if (hasAuth) enforceScroll();
+        // 再描画時に実行
+        holdScrollPosition();
     }
 
     init();
