@@ -77,32 +77,40 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 6時間ログイン維持 & 抜本的なスクロール固定JS ---
-# セレクトボックス選択時の「跳ね上がり」を強制的に抑え込むスクリプト
+# --- 3. 6時間ログイン維持 & 抜本的なスクロール完全固定JS ---
+# セレクトボックス（カテゴリー等）変更時の「跳ね上がり」を徹底的に抑え込む
 persistence_js = """
 <script>
     const AUTH_KEY = 'ksc_auth_expiry';
-    const SCROLL_KEY = 'ksc_scroll_pos_v2';
+    const SCROLL_KEY = 'ksc_scroll_pos_v3';
     
-    // スクリプトが読み込まれた瞬間（＝再描画直後）に即座に復元
-    const savedPos = window.localStorage.getItem(SCROLL_KEY);
-    if (savedPos) {
-        window.parent.scrollTo(0, parseInt(savedPos));
-        // 少し遅れてもう一度実行（Streamlitの自動スクロール対策）
-        setTimeout(() => {
-            window.parent.scrollTo(0, parseInt(savedPos));
-        }, 50);
-        setTimeout(() => {
-            window.parent.scrollTo(0, parseInt(savedPos));
-        }, 300);
+    // スクロール位置を復元する関数（複数回実行して確実性を高める）
+    function restoreScroll() {
+        const savedPos = window.localStorage.getItem(SCROLL_KEY);
+        if (savedPos) {
+            const pos = parseInt(savedPos);
+            window.parent.scrollTo(0, pos);
+            // Streamlitの自動リセットに対抗するため、遅延実行を重ねる
+            setTimeout(() => window.parent.scrollTo(0, pos), 10);
+            setTimeout(() => window.parent.scrollTo(0, pos), 100);
+            setTimeout(() => window.parent.scrollTo(0, pos), 500);
+        }
     }
 
-    // 常に最新のスクロール位置を記録
+    // 常に最新のスクロール位置を監視・保存
     window.parent.addEventListener('scroll', () => {
-        if (window.parent.scrollY > 0) {
-            window.localStorage.setItem(SCROLL_KEY, window.parent.scrollY);
+        const currentPos = window.parent.scrollY;
+        if (currentPos > 0) {
+            window.localStorage.setItem(SCROLL_KEY, currentPos);
         }
-    }, true);
+    }, { passive: true });
+
+    // ページ読み込み完了時に復元を実行
+    if (document.readyState === 'complete') {
+        restoreScroll();
+    } else {
+        window.addEventListener('load', restoreScroll);
+    }
 
     // 認証チェック
     function checkAuth() {
