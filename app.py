@@ -51,6 +51,7 @@ def load_data():
     elif "対戦場所" not in df.columns:
         df["対戦場所"] = ""
 
+    # UI用制御列
     df.insert(0, '選択', False)
     df['結果入力'] = False
     df['写真管理'] = False
@@ -200,7 +201,8 @@ else:
     if search_query:
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+    # 制御に必要な 'No' を確実に含める
+    display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
     display_cols = [c for c in display_cols if c in df.columns]
     
     current_df = df[display_cols].reset_index(drop=True)
@@ -211,7 +213,8 @@ else:
             "選択": st.column_config.CheckboxColumn("選択", width="small"),
             "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"),
             "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
-            "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
+            "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"),
+            "No": None # UI上では非表示にする
         }, 
         use_container_width=True, key="main_editor"
     )
@@ -219,6 +222,7 @@ else:
     nos_to_delete = []
     for i in range(len(edited_df)):
         edit_row = edited_df.iloc[i]
+        # current_df から安全に No を取得
         original_no = int(current_df.iloc[i]["No"])
         
         if edit_row.get("選択") == True:
@@ -239,7 +243,8 @@ else:
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
-        print_cols = [c for c in display_cols if c not in ['選択', '結果入力', '写真管理']]
+        # 印刷用からは制御列を除外
+        print_cols = [c for c in display_cols if c not in ['選択', '結果入力', '写真管理', 'No']]
         print_df = current_df[print_cols]
         html_table = print_df.to_html(index=False)
         components.html(f"<html><body>{html_table}<script>setTimeout(()=>{{window.print()}},500)</script></body></html>", height=0)
