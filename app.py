@@ -77,53 +77,65 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 【抜本改善】スクロール強制固定ロジック ---
+# --- 3. 【最終版】物理スクロール・デッドロック・スクリプト ---
 st.markdown("""
     <style>
-    /* ブラウザの自動スクロール挙動をCSSで封鎖 */
-    html { scroll-behavior: auto !important; overscroll-behavior-y: none !important; }
+    /* ブラウザの挙動を根本から停止 */
+    html, body { 
+        scroll-behavior: auto !important; 
+        overscroll-behavior-y: none !important;
+        history-navigation-ignore: true;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# セレクトボックス操作時の「跳ね上がり」を、JSが秒間100回の頻度で抑え込みます
-persistence_js = """
+final_lock_js = """
 <script>
-    const STORAGE_KEY = 'ksc_scroll_lock_fixed_v9';
+    const STORAGE_KEY = 'ksc_scroll_lock_ultimate';
     const p = window.parent;
 
-    // 現在の座標を常にリアルタイムで保存
+    // 現在の座標をリアルタイムで保存
     p.addEventListener('scroll', () => {
         if (p.scrollY > 0) {
             window.localStorage.setItem(STORAGE_KEY, p.scrollY);
         }
     }, { passive: true });
 
-    // 強制ロック関数：5秒間、あらゆる「最上部へ戻る」命令を上書きし続ける
-    function forceLockPosition() {
+    // 【最強ロック】5秒間、あらゆるスクロール変動を力ずくで書き換える
+    function lockNow() {
         const saved = window.localStorage.getItem(STORAGE_KEY);
         if (!saved) return;
         
         const targetY = parseInt(saved);
         const startTime = Date.now();
 
-        // requestAnimationFrame（描画直前）とsetIntervalの二重で固定
-        function sync() {
+        // 5ミリ秒周期という極限の頻度で「今ここ」を強制し続ける
+        const timer = setInterval(() => {
             p.scrollTo(0, targetY);
-            if (Date.now() - startTime < 5000) {
-                requestAnimationFrame(sync);
+            if (Date.now() - startTime > 5000) {
+                clearInterval(timer);
             }
-        }
-        sync();
-
-        const backupTimer = setInterval(() => {
+        }, 5);
+        
+        // 描画フレームごとの同期も並行実施
+        function frameLock() {
             p.scrollTo(0, targetY);
-            if (Date.now() - startTime > 5000) clearInterval(backupTimer);
-        }, 10);
+            if (Date.now() - startTime < 5000) requestAnimationFrame(frameLock);
+        }
+        frameLock();
     }
 
-    // 認証管理と位置復元の初期化
+    // セレクトボックス等の変更（通信開始）を検知するための監視
+    p.addEventListener('click', (e) => {
+        // セレクトボックスの選択肢（SelectboxColumn）をクリックした瞬間に座標を記憶
+        if (e.target.closest('[role="listbox"]') || e.target.closest('[data-testid="stDataFrame"]')) {
+            lockNow();
+        }
+    });
+
+    // 認証と初期化
     const AUTH_KEY = 'ksc_auth_expiry';
-    function checkAndInitialize() {
+    function init() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
         const url = new URL(p.location.href);
@@ -139,14 +151,14 @@ persistence_js = """
             return;
         }
         
-        // 再描画（Rerun）が発生した瞬間に強制ロックを発動
-        if (hasAuth) forceLockPosition();
+        // 保存後の再描画時にも即座にロックを発動
+        if (hasAuth) lockNow();
     }
 
-    checkAndInitialize();
+    init();
 </script>
 """
-components.html(persistence_js, height=0)
+components.html(final_lock_js, height=0)
 
 is_authenticated = st.query_params.get("auth") == "true"
 
