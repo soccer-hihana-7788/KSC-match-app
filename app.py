@@ -77,27 +77,40 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 6時間ログイン維持 & スクロール制御 (抜本的見直し) ---
-# localStorageを使用して、ブラウザを閉じても6時間はログインを維持します。
-# 同時に、入力後のスクロール位置をブラウザ側に記憶させます。
+# --- 3. 6時間ログイン維持 & 抜本的なスクロール固定JS ---
+# セレクトボックス選択時の「跳ね上がり」を強制的に抑え込むスクリプト
 persistence_js = """
 <script>
     const AUTH_KEY = 'ksc_auth_expiry';
-    const SCROLL_KEY = 'ksc_scroll_pos';
+    const SCROLL_KEY = 'ksc_scroll_pos_v2';
     
-    // スクロール位置の常時監視
+    // スクリプトが読み込まれた瞬間（＝再描画直後）に即座に復元
+    const savedPos = window.localStorage.getItem(SCROLL_KEY);
+    if (savedPos) {
+        window.parent.scrollTo(0, parseInt(savedPos));
+        // 少し遅れてもう一度実行（Streamlitの自動スクロール対策）
+        setTimeout(() => {
+            window.parent.scrollTo(0, parseInt(savedPos));
+        }, 50);
+        setTimeout(() => {
+            window.parent.scrollTo(0, parseInt(savedPos));
+        }, 300);
+    }
+
+    // 常に最新のスクロール位置を記録
     window.parent.addEventListener('scroll', () => {
-        window.localStorage.setItem(SCROLL_KEY, window.parent.scrollY);
+        if (window.parent.scrollY > 0) {
+            window.localStorage.setItem(SCROLL_KEY, window.parent.scrollY);
+        }
     }, true);
 
-    // 認証と位置復元のチェック
-    function syncState() {
+    // 認証チェック
+    function checkAuth() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
         const url = new URL(window.parent.location.href);
         const hasAuthParam = url.searchParams.get('auth') === 'true';
 
-        // 1. 期限切れチェック
         if (expiry && Number(expiry) < now) {
             window.localStorage.removeItem(AUTH_KEY);
             if (hasAuthParam) {
@@ -107,29 +120,16 @@ persistence_js = """
             return;
         }
 
-        // 2. 自動ログイン処理 (パラメータがないが期限内の場合)
         if (expiry && Number(expiry) > now && !hasAuthParam) {
             url.searchParams.set('auth', 'true');
             window.parent.location.href = url.href;
-            return;
-        }
-
-        // 3. スクロール位置の復元 (認証済みの場合のみ)
-        if (hasAuthParam) {
-            const savedPos = window.localStorage.getItem(SCROLL_KEY);
-            if (savedPos) {
-                setTimeout(() => {
-                    window.parent.scrollTo(0, parseInt(savedPos));
-                }, 100);
-            }
         }
     }
-    syncState();
+    checkAuth();
 </script>
 """
 components.html(persistence_js, height=0)
 
-# Streamlit側での認証判定
 is_authenticated = st.query_params.get("auth") == "true"
 
 if not is_authenticated:
@@ -138,12 +138,11 @@ if not is_authenticated:
     p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            # 6時間(21600秒)の期限をセット
             expiry = (datetime.now() + timedelta(hours=6)).timestamp()
             st.query_params["auth"] = "true"
             components.html(f"""
                 <script>
-                    window.localStorage.setItem('{ 'ksc_auth_expiry' }', '{expiry}');
+                    window.localStorage.setItem('ksc_auth_expiry', '{expiry}');
                     window.parent.location.reload();
                 </script>
             """, height=0)
@@ -174,7 +173,6 @@ def on_data_change():
 
 # --- 5. 画面制御 ---
 if st.session_state.media_no is not None:
-    # 写真管理画面 (中略 - 仕様変更なし)
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -208,7 +206,6 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
-    # 試合結果入力画面 (中略 - 仕様変更なし)
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
@@ -248,7 +245,6 @@ elif st.session_state.selected_no is not None:
                 st.success("保存完了"); st.rerun()
 
 else:
-    # 試合管理一覧画面
     st.title("⚽ KSC試合管理一覧")
     
     c1, c2 = st.columns([2, 1])
@@ -263,7 +259,6 @@ else:
     display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
     st.session_state.current_display_df = df[[c for c in display_cols if c in df.columns]]
     
-    # 画面全体のスクロールを可能にするため、通常通りのdata_editorを使用
     st.data_editor(
         st.session_state.current_display_df, hide_index=True, 
         column_config={
