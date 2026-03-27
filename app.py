@@ -79,7 +79,6 @@ def add_new_row_at_bottom(new_data_dict):
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        
         all_vals = ws.get_all_values()
         existing_nos = [int(row[0]) for row in all_vals[1:] if row and str(row[0]).isdigit()]
         new_no = max(existing_nos + [0]) + 1
@@ -118,7 +117,7 @@ def delete_selected_rows(nos_to_delete):
         st.error(f"削除エラー: {e}")
         return False
 
-# --- 削除確認ポップアップ (修正箇所) ---
+# --- 削除確認ポップアップ (抜本的修正) ---
 @st.dialog("試合データの削除確認")
 def delete_confirm_dialog(nos):
     st.warning(f"⚠️ 選択された {len(nos)} 件のデータを削除します。よろしいですか？")
@@ -127,11 +126,16 @@ def delete_confirm_dialog(nos):
     with c1:
         if st.button("はい、削除する", type="primary", use_container_width=True):
             if delete_selected_rows(nos):
+                # 削除成功後、エディタの状態をクリアしてリロード
+                if "main_editor" in st.session_state:
+                    del st.session_state["main_editor"]
                 st.session_state.df_list = load_data()
                 st.rerun()
     with c2:
-        # 修正: st.rerun()を呼び出すことでダイアログを確実に閉じます
+        # キャンセルボタン: セッション上のエディタ選択状態を強制削除してリロード
         if st.button("キャンセル", use_container_width=True):
+            if "main_editor" in st.session_state:
+                del st.session_state["main_editor"]
             st.rerun()
 
 # --- 3. 状態管理 ---
@@ -248,6 +252,7 @@ else:
     
     current_df = df[display_cols].reset_index(drop=True)
     
+    # 選択チェックを監視
     edited_df = st.data_editor(
         current_df, hide_index=True, 
         column_config={
@@ -275,6 +280,7 @@ else:
             st.session_state.media_no = original_no
             st.rerun()
 
+    # 選択されていたらポップアップ表示
     if nos_to_delete:
         delete_confirm_dialog(nos_to_delete)
 
