@@ -77,74 +77,66 @@ def update_row(actual_index, updated_row_series):
     except Exception as e:
         st.error(f"保存エラー: {e}")
 
-# --- 3. 抜本的なスクロール完全固定 & 6時間ログイン維持 ---
-# ページ全体のスクロールリセットをCSSレベルで禁止し、かつ多重監視を行います。
+# --- 3. 抜本的対策：スクロール絶対固定ロジック & 6時間ログイン ---
 st.markdown("""
     <style>
-    /* ページ全体のリロード時の挙動を抑制 */
-    html, body { 
-        scroll-behavior: auto !important;
-        overscroll-behavior-y: contain; 
-    }
-    /* Streamlit標準のスクロール制御を無効化する試み */
-    [data-testid="stAppViewBlockContainer"] {
-        padding-top: 2rem;
-    }
+    /* ブラウザの自動スクロールをCSSで物理的に無効化 */
+    html { scroll-behavior: auto !important; }
     </style>
 """, unsafe_allow_html=True)
 
+# セレクトボックス変更時の「跳ね上がり」を、JSがミリ秒単位で監視して力ずくで抑え込みます
 persistence_js = """
 <script>
     const AUTH_KEY = 'ksc_auth_expiry';
-    const SCROLL_KEY = 'ksc_scroll_pos_final';
+    const SCROLL_KEY = 'ksc_scroll_lock_pos';
     
-    // スクロール位置を即座に、かつ何度も復元する
-    function lockScroll() {
-        const savedPos = window.localStorage.getItem(SCROLL_KEY);
-        if (savedPos) {
-            const y = parseInt(savedPos);
-            window.parent.scrollTo(0, y);
-            // 描画が安定するまでしつこく書き換える
-            let count = 0;
-            const timer = setInterval(() => {
-                window.parent.scrollTo(0, y);
-                if (++count > 20) clearInterval(timer);
-            }, 30);
-        }
-    }
+    const p = window.parent;
 
-    // 保存タイミングで強制的に位置をロック
-    window.parent.addEventListener('scroll', () => {
-        if (window.parent.scrollY > 0) {
-            window.localStorage.setItem(SCROLL_KEY, window.parent.scrollY);
+    // 現在の座標を常に記録
+    p.addEventListener('scroll', () => {
+        if (p.scrollY > 0) {
+            window.localStorage.setItem(SCROLL_KEY, p.scrollY);
         }
     }, { passive: true });
 
-    // 認証と位置復元のチェック
-    function checkState() {
+    // スクロールを「現在地」に強制固定するループ関数
+    function enforceScroll() {
+        const saved = window.localStorage.getItem(SCROLL_KEY);
+        if (saved) {
+            const targetY = parseInt(saved);
+            // Streamlitの再描画（Rerun）が終わるまで、約2秒間しつこく固定し続ける
+            let startTime = Date.now();
+            const timer = setInterval(() => {
+                p.scrollTo(0, targetY);
+                if (Date.now() - startTime > 2000) clearInterval(timer);
+            }, 10);
+        }
+    }
+
+    // 認証チェック & ページ読み込み時の位置復元
+    function init() {
         const expiry = window.localStorage.getItem(AUTH_KEY);
         const now = Date.now() / 1000;
-        const url = new URL(window.parent.location.href);
-        const hasAuthParam = url.searchParams.get('auth') === 'true';
+        const url = new URL(p.location.href);
+        const hasAuth = url.searchParams.get('auth') === 'true';
 
+        // ログイン維持チェック
         if (expiry && Number(expiry) < now) {
             window.localStorage.removeItem(AUTH_KEY);
-            if (hasAuthParam) {
-                url.searchParams.delete('auth');
-                window.parent.location.href = url.href;
-            }
+            if (hasAuth) { url.searchParams.delete('auth'); p.location.href = url.href; }
             return;
         }
-        if (expiry && Number(expiry) > now && !hasAuthParam) {
-            url.searchParams.set('auth', 'true');
-            window.parent.location.href = url.href;
+        if (expiry && Number(expiry) > now && !hasAuth) {
+            url.searchParams.set('auth', 'true'); p.location.href = url.href;
             return;
         }
         
-        if (hasAuthParam) lockScroll();
+        // 位置復元を実行
+        if (hasAuth) enforceScroll();
     }
-    
-    checkState();
+
+    init();
 </script>
 """
 components.html(persistence_js, height=0)
@@ -170,18 +162,16 @@ if not is_authenticated:
             st.error("IDまたはパスワードが違います")
     st.stop()
 
-# --- 4. データ処理 ---
+# --- 4. データ管理 ---
 if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
 
 def on_data_change():
-    # 変更があった瞬間、ブラウザ側に現在のスクロール位置を再度強調して保存させる
     changes = st.session_state["editor"]
     for row_idx, edit_values in changes["edited_rows"].items():
         actual_index = st.session_state.current_display_df.index[row_idx]
         
-        # 画面遷移（リロード必須なもの）
         if edit_values.get("結果入力") is True:
             st.session_state.selected_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
@@ -189,7 +179,6 @@ def on_data_change():
             st.session_state.media_no = int(st.session_state.df_list.at[actual_index, "No"])
             return
             
-        # データ更新（ここが「跳ね上がり」の主因）
         for col, val in edit_values.items():
             if col not in ["結果入力", "写真管理"]:
                 st.session_state.df_list.at[actual_index, col] = val
@@ -197,12 +186,9 @@ def on_data_change():
 
 # --- 5. 画面制御 ---
 if st.session_state.media_no is not None:
-    # 写真管理画面 (仕様変更なし)
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
-    if st.button("← 一覧に戻る"):
-        st.session_state.media_no = None
-        st.rerun()
+    if st.button("← 一覧に戻る"): st.session_state.media_no = None; st.rerun()
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_media = sh.worksheet("media_storage")
     except: ws_media = sh.add_worksheet(title="media_storage", rows="2000", cols="3"); ws_media.append_row(["match_no", "filename", "base64_data"])
@@ -217,14 +203,13 @@ if st.session_state.media_no is not None:
             except Exception as e: st.error(f"失敗: {e}")
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
-        cols = st.columns(3); 
+        cols = st.columns(3)
         for idx, item in enumerate(match_photos):
             with cols[idx % 3]: 
                 st.image(base64.b64decode(item['base64_data']), use_container_width=True)
                 if st.button("削除", key=f"del_{idx}"): cell = ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
-    # 試合結果入力画面 (仕様変更なし)
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; st.rerun()
@@ -246,7 +231,6 @@ elif st.session_state.selected_no is not None:
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
 
 else:
-    # メイン一覧画面
     st.title("⚽ KSC試合管理一覧")
     c1, c2 = st.columns([2, 1])
     with c1: search_query = st.text_input("🔍 検索")
@@ -259,8 +243,6 @@ else:
     display_cols = ['結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
     st.session_state.current_display_df = df[[c for c in display_cols if c in df.columns]]
     
-    # 抜本的対策：セレクトボックス（カテゴリー・競技分類）を含む表。
-    # on_changeが発生した瞬間に、JavaScript側へ「現在地を死守せよ」という命令が飛ぶ構成。
     st.data_editor(
         st.session_state.current_display_df, hide_index=True, 
         column_config={
