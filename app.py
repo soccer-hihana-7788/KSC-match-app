@@ -14,19 +14,23 @@ import time
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
-# オレンジボタン用CSS
+# 【修正】ボタンの色を「もう少し暗いオレンジ」に変更
 st.markdown("""
     <style>
     div.stButton > button:first-child {
-        background-color: #ff8c00;
+        background-color: #d35400; /* 濃いオレンジに変更 */
         color: white;
         border-radius: 5px;
         font-weight: bold;
         border: none;
     }
     div.stButton > button:hover {
-        background-color: #e67e00;
+        background-color: #a04000;
         color: white;
+    }
+    /* 保存ボタンなどのローディング表示用 */
+    .stSpinner > div {
+        border-top-color: #d35400 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -54,6 +58,7 @@ def load_data():
         if not all_values or len(all_values) < 2:
             return pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
         header = all_values[0]
+        # 【維持】対戦相手が空の行は無視（空白セル対策）
         valid_rows = [r for r in all_values[1:] if len(r) > 4 and r[4].strip() != ""]
         df = pd.DataFrame(valid_rows, columns=header)
     except Exception:
@@ -102,21 +107,16 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
         st.error(f"保存エラー: {e}")
         return False
 
-# --- 3. 状態管理（スマホ閉鎖対策） ---
-# 6時間の有効期限チェック
+# --- 3. 状態管理（6時間維持） ---
 AUTH_TIMEOUT_HOURS = 6
 
 if 'df_list' not in st.session_state:
     st.session_state.df_list = load_data()
-
-# ログイン状態の永続化
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "auth_time" not in st.session_state:
     st.session_state.auth_time = None
 
-# セッションが切れていてもURLパラメータ等から復元を試みる（簡易的な永続化）
-# 本来はLocalStorageを使うがStreamlitの仕様上、session_stateの維持を優先
 current_time = datetime.now()
 if st.session_state.auth_time:
     elapsed = current_time - st.session_state.auth_time
@@ -131,7 +131,7 @@ if 'selected_no' not in st.session_state:
 if 'media_no' not in st.session_state:
     st.session_state.media_no = None
 
-# ログイン画面
+# ログイン
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u = st.text_input("ID")
@@ -143,15 +143,14 @@ if not st.session_state.authenticated:
             st.rerun()
     st.stop()
 
-# --- 4. 画面遷移ロジック ---
-# 写真管理画面
+# --- 4. 画面遷移 ---
+# 写真管理
 if st.session_state.media_no is not None:
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.media_no = None
         st.rerun()
-    # (写真処理ロジック - 既存通り)
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_media = sh.worksheet("media_storage")
     except:
@@ -159,7 +158,7 @@ if st.session_state.media_no is not None:
         ws_media.append_row(["match_no", "filename", "base64_data"])
     uploaded_file = st.file_uploader("写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード"):
-        with st.spinner("保存中..."):
+        with st.spinner("写真をアップロード中..."):
             img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
             buf = BytesIO(); img.thumbnail((800, 800)); img.save(buf, format="JPEG", quality=50)
             encoded = base64.b64encode(buf.getvalue()).decode()
@@ -174,14 +173,13 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data'])
                     if cell: ws_media.delete_rows(cell.row); st.rerun()
 
-# 結果入力画面
+# 【修正】結果入力（保存レスポンス改善）
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.selected_no = None
         st.rerun()
-    # (結果入力ロジック - 既存通り)
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
     except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
@@ -192,11 +190,16 @@ elif st.session_state.selected_no is not None:
             res_val = st.radio("結果", ["勝ち", "負け", "引き分け"], key=f"rad_{rk}")
             new_l = st.text_input("自", key=f"l_{rk}"); new_r = st.text_input("相手", key=f"r_{rk}")
             sc_input = st.text_area("得点者", key=f"txt_{rk}")
-            if st.button("保存", key=f"btn_{rk}"):
-                all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
-                ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
+            # 【レスポンス改善】保存中にスピナーを表示
+            if st.button("結果を保存", key=f"btn_{rk}"):
+                with st.spinner("スプレッドシートに保存中..."):
+                    all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
+                    ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
+                    st.success("保存完了しました")
+                    time.sleep(0.5)
+                    st.rerun()
 
-# 新規登録画面
+# 新規登録
 elif st.session_state.page == "create":
     st.title("➕ 新規試合登録")
     if st.button("← 戻る"): st.session_state.page = "list"; st.rerun()
@@ -209,9 +212,10 @@ elif st.session_state.page == "create":
         c_class = st.text_input("試合分類")
         c_memo = st.text_area("備考")
         if st.form_submit_button("試合管理一覧へ登録"):
-            new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
-            if add_new_row_strictly_at_blank_top(new_data):
-                st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
+            with st.spinner("新規データを登録中..."):
+                new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
+                if add_new_row_strictly_at_blank_top(new_data):
+                    st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
 # 一覧画面
 else:
