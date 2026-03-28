@@ -52,17 +52,19 @@ def load_data():
     try:
         all_values = ws_list.get_all_values()
         if not all_values or len(all_values) < 2:
-            return pd.DataFrame(columns=SHEET_COLUMNS)
+            return pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
         
         header = all_values[0]
         
-        # 【抜本修正】「対戦相手」と「No」の両方が空の行は、データとして読み込まない
-        # これにより、下部の空行にデフォルト値が入るのを防ぎます
+        # 【抜本修正】「対戦相手」が空の行はデータとして認識させない（空白表示を徹底）
         valid_rows = []
         for r in all_values[1:]:
-            # 行の長さが足りない場合や、No(index 0)と対戦相手(index 4)が共に空の場合はスキップ
+            # 配列の長さチェックと、主要項目（Noまたは対戦相手）の入力チェック
             if len(r) > 4:
-                if r[0].strip() == "" and r[4].strip() == "":
+                no_val = r[0].strip()
+                opponent_val = r[4].strip()
+                # どちらも空なら、その行は表示対象外にする
+                if no_val == "" and opponent_val == "":
                     continue
                 valid_rows.append(r)
         
@@ -70,33 +72,31 @@ def load_data():
     except Exception:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
     
-    # 既存データの整形（有効な行に対してのみ実施）
+    # 型変換処理（データがある場合のみ実行）
     if not df.empty:
         if 'No' in df.columns:
             df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
         if '日時' in df.columns:
+            # エラー防止のため coerce を使い、無効な日付はNaTにする
             df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
         
-        # カラム名の互換性維持
         if "試合場所" in df.columns:
             df = df.rename(columns={"試合場所": "対戦場所"})
         elif "対戦場所" not in df.columns:
             df["対戦場所"] = ""
 
-        # UI用カラムの追加
+        # UI用カラム
         df.insert(0, '選択', False)
         df['結果入力'] = False
         df['写真管理'] = False
     else:
-        # データが空の場合の初期化
-        df = pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
-        if "試合場所" in df.columns:
-            df = df.rename(columns={"試合場所": "対戦場所"})
+        # データが1件もない場合の空の構造
+        df = pd.DataFrame(columns=['選択', '結果入力', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '対戦場所', '試合分類', '備考', '写真管理'])
 
     return df
 
 def add_new_row_strictly_at_blank_top(new_data_dict):
-    """記載済み行のすぐ下の行（空きセル最上部）に登録する"""
+    """【維持】既存データのすぐ下の行に登録する"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
@@ -109,7 +109,7 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
             if val.strip() != "":
                 last_data_idx = i + 1
 
-        # 採番
+        # 新規No採番
         existing_nos = [int(v) for v in no_column_values[1:] if v.strip().isdigit()]
         new_no = max(existing_nos + [0]) + 1
         
@@ -118,9 +118,10 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
             if col == "No": val = new_no
             elif col == "試合場所": val = new_data_dict.get("対戦場所", "")
             else: val = new_data_dict.get(col, "")
-            if isinstance(val, date): val = val.isoformat()
+            if isinstance(val, (date, datetime)): val = val.isoformat()
             row_values.append(str(val))
         
+        # 特定した最終行の1個下に書き込み
         target_row = last_data_idx + 1
         ws.update(f"A{target_row}", [row_values])
         return True
@@ -270,6 +271,7 @@ else:
     if search_query:
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
+    # 【修正】データが存在する場合のみ表示・処理を行う
     if not df.empty:
         display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
         display_cols = [c for c in display_cols if c in df.columns]
@@ -304,7 +306,7 @@ else:
         if nos_to_delete:
             delete_confirm_dialog(nos_to_delete)
     else:
-        st.info("登録されている試合データはありません。")
+        st.info("現在、登録されている試合はありません。新規登録からデータを追加してください。")
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
