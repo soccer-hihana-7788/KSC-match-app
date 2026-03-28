@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
@@ -56,28 +56,22 @@ def load_data():
         
         header = all_values[0]
         
-        # 【抜本修正】「対戦相手」が空の行はデータとして認識させない（空白表示を徹底）
+        # 【最重要修正】対戦相手(Index 4)が入力されていない行は「存在しないもの」として無視
+        # これにより、枠線だけの行に初期値が出る問題を根絶します
         valid_rows = []
         for r in all_values[1:]:
-            # 配列の長さチェックと、主要項目（Noまたは対戦相手）の入力チェック
-            if len(r) > 4:
-                no_val = r[0].strip()
-                opponent_val = r[4].strip()
-                # どちらも空なら、その行は表示対象外にする
-                if no_val == "" and opponent_val == "":
-                    continue
+            if len(r) > 4 and r[4].strip() != "":
                 valid_rows.append(r)
         
         df = pd.DataFrame(valid_rows, columns=header)
     except Exception:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
     
-    # 型変換処理（データがある場合のみ実行）
+    # 既存データの整形（有効な行のみ）
     if not df.empty:
         if 'No' in df.columns:
             df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
         if '日時' in df.columns:
-            # エラー防止のため coerce を使い、無効な日付はNaTにする
             df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
         
         if "試合場所" in df.columns:
@@ -85,31 +79,32 @@ def load_data():
         elif "対戦場所" not in df.columns:
             df["対戦場所"] = ""
 
-        # UI用カラム
+        # UI用カラム（すべて空で初期化）
         df.insert(0, '選択', False)
         df['結果入力'] = False
         df['写真管理'] = False
     else:
-        # データが1件もない場合の空の構造
-        df = pd.DataFrame(columns=['選択', '結果入力', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '対戦場所', '試合分類', '備考', '写真管理'])
+        # データが0件の場合、余計な初期値を持たない空のDFを作成
+        cols = ['選択', '結果入力', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '対戦場所', '試合分類', '備考', '写真管理']
+        df = pd.DataFrame(columns=cols)
 
     return df
 
 def add_new_row_strictly_at_blank_top(new_data_dict):
-    """【維持】既存データのすぐ下の行に登録する"""
+    """【仕様遵守】保存済み行のすぐ下の行（空きセル最上部）に登録"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
         
-        # A列（No）を取得して本当の最終行を特定
+        # A列(No)をスキャンして最後のデータ行を特定
         no_column_values = ws.col_values(1)
         last_data_idx = 0
         for i, val in enumerate(no_column_values):
             if val.strip() != "":
                 last_data_idx = i + 1
 
-        # 新規No採番
+        # 新規No
         existing_nos = [int(v) for v in no_column_values[1:] if v.strip().isdigit()]
         new_no = max(existing_nos + [0]) + 1
         
@@ -121,7 +116,7 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
             if isinstance(val, (date, datetime)): val = val.isoformat()
             row_values.append(str(val))
         
-        # 特定した最終行の1個下に書き込み
+        # 確実に「最後に入力した行の1個下」へピンポイント書き込み
         target_row = last_data_idx + 1
         ws.update(f"A{target_row}", [row_values])
         return True
@@ -271,7 +266,7 @@ else:
     if search_query:
         df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # 【修正】データが存在する場合のみ表示・処理を行う
+    # データが存在する場合のみ表示
     if not df.empty:
         display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
         display_cols = [c for c in display_cols if c in df.columns]
@@ -306,7 +301,7 @@ else:
         if nos_to_delete:
             delete_confirm_dialog(nos_to_delete)
     else:
-        st.info("現在、登録されている試合はありません。新規登録からデータを追加してください。")
+        st.info("登録済みの試合はありません。")
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
