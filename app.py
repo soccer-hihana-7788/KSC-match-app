@@ -54,6 +54,7 @@ def load_data():
         if not all_values or len(all_values) < 2:
             return pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
         header = all_values[0]
+        # 対戦相手が入力されている行のみを有効なデータとする
         valid_rows = [r for r in all_values[1:] if len(r) > 4 and r[4].strip() != ""]
         df = pd.DataFrame(valid_rows, columns=header)
     except Exception:
@@ -126,7 +127,7 @@ if 'selected_no' not in st.session_state:
 if 'media_no' not in st.session_state:
     st.session_state.media_no = None
 
-# ログイン画面
+# ログイン
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u = st.text_input("ID")
@@ -168,7 +169,7 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data'])
                     if cell: ws_media.delete_rows(cell.row); st.rerun()
 
-# 【修正】結果入力（保存の確実化と見出しへの結果表示）
+# 結果入力（エラー修正版）
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
@@ -185,19 +186,22 @@ elif st.session_state.selected_no is not None:
 
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
+        # 【修正】KeyError対策: 辞書から安全に値を取得し、デフォルト値を設定
         current_data = all_results.get(rk, {"score": " - ", "scorers": [], "result": ""})
         
-        # 【修正】見出しに結果とスコアを表示
+        # 見出し表示ロジックの安全な適用
         header_text = f"第 {i} 試合"
-        if current_data["result"]:
-            header_text += f" （{current_data['result']} {current_data['score']}）"
+        safe_result = current_data.get("result", "")
+        safe_score = current_data.get("score", " - ")
+        if safe_result:
+            header_text += f" （{safe_result} {safe_score}）"
             
         with st.expander(header_text):
-            # 前回の値を初期値としてセット
-            res_idx = ["勝ち", "負け", "引き分け"].index(current_data["result"]) if current_data["result"] in ["勝ち", "負け", "引き分け"] else 0
-            res_val = st.radio("結果", ["勝ち", "負け", "引き分け"], index=res_idx, key=f"rad_{rk}")
+            res_options = ["勝ち", "負け", "引き分け"]
+            res_idx = res_options.index(safe_result) if safe_result in res_options else 0
+            res_val = st.radio("結果", res_options, index=res_idx, key=f"rad_{rk}")
             
-            s_parts = current_data["score"].split("-")
+            s_parts = safe_score.split("-")
             old_l = s_parts[0].strip() if len(s_parts) > 0 else ""
             old_r = s_parts[1].strip() if len(s_parts) > 1 else ""
             
@@ -210,7 +214,6 @@ elif st.session_state.selected_no is not None:
             
             if st.button("この試合を保存", key=f"btn_{rk}"):
                 with st.spinner("保存中..."):
-                    # データを辞書にまとめてJSON更新
                     all_results[rk] = {
                         "score": f"{new_l}-{new_r}",
                         "scorers": [s.strip() for s in sc_input.split(",") if s.strip()],
