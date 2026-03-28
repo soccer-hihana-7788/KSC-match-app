@@ -14,11 +14,11 @@ import time
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
-# 【修正】ボタンの色を「もう少し暗いオレンジ」に変更
+# ボタンの色（濃いオレンジ）を維持
 st.markdown("""
     <style>
     div.stButton > button:first-child {
-        background-color: #d35400; /* 濃いオレンジに変更 */
+        background-color: #d35400;
         color: white;
         border-radius: 5px;
         font-weight: bold;
@@ -27,10 +27,6 @@ st.markdown("""
     div.stButton > button:hover {
         background-color: #a04000;
         color: white;
-    }
-    /* 保存ボタンなどのローディング表示用 */
-    .stSpinner > div {
-        border-top-color: #d35400 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -58,7 +54,6 @@ def load_data():
         if not all_values or len(all_values) < 2:
             return pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
         header = all_values[0]
-        # 【維持】対戦相手が空の行は無視（空白セル対策）
         valid_rows = [r for r in all_values[1:] if len(r) > 4 and r[4].strip() != ""]
         df = pd.DataFrame(valid_rows, columns=header)
     except Exception:
@@ -131,7 +126,7 @@ if 'selected_no' not in st.session_state:
 if 'media_no' not in st.session_state:
     st.session_state.media_no = None
 
-# ログイン
+# ログイン画面
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u = st.text_input("ID")
@@ -158,7 +153,7 @@ if st.session_state.media_no is not None:
         ws_media.append_row(["match_no", "filename", "base64_data"])
     uploaded_file = st.file_uploader("写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード"):
-        with st.spinner("写真をアップロード中..."):
+        with st.spinner("アップロード中..."):
             img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
             buf = BytesIO(); img.thumbnail((800, 800)); img.save(buf, format="JPEG", quality=50)
             encoded = base64.b64encode(buf.getvalue()).decode()
@@ -173,29 +168,56 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data'])
                     if cell: ws_media.delete_rows(cell.row); st.rerun()
 
-# 【修正】結果入力（保存レスポンス改善）
+# 【修正】結果入力（保存の確実化と見出しへの結果表示）
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.selected_no = None
         st.rerun()
+    
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
     except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
-    res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
+    
+    res_raw = ws_res.acell("A2").value
+    all_results = json.loads(res_raw) if res_raw else {}
+
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
-        with st.expander(f"第 {i} 試合"):
-            res_val = st.radio("結果", ["勝ち", "負け", "引き分け"], key=f"rad_{rk}")
-            new_l = st.text_input("自", key=f"l_{rk}"); new_r = st.text_input("相手", key=f"r_{rk}")
-            sc_input = st.text_area("得点者", key=f"txt_{rk}")
-            # 【レスポンス改善】保存中にスピナーを表示
-            if st.button("結果を保存", key=f"btn_{rk}"):
-                with st.spinner("スプレッドシートに保存中..."):
-                    all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
+        current_data = all_results.get(rk, {"score": " - ", "scorers": [], "result": ""})
+        
+        # 【修正】見出しに結果とスコアを表示
+        header_text = f"第 {i} 試合"
+        if current_data["result"]:
+            header_text += f" （{current_data['result']} {current_data['score']}）"
+            
+        with st.expander(header_text):
+            # 前回の値を初期値としてセット
+            res_idx = ["勝ち", "負け", "引き分け"].index(current_data["result"]) if current_data["result"] in ["勝ち", "負け", "引き分け"] else 0
+            res_val = st.radio("結果", ["勝ち", "負け", "引き分け"], index=res_idx, key=f"rad_{rk}")
+            
+            s_parts = current_data["score"].split("-")
+            old_l = s_parts[0].strip() if len(s_parts) > 0 else ""
+            old_r = s_parts[1].strip() if len(s_parts) > 1 else ""
+            
+            c_l, c_r = st.columns(2)
+            with c_l: new_l = st.text_input("自スコア", value=old_l, key=f"l_{rk}")
+            with c_r: new_r = st.text_input("相手スコア", value=old_r, key=f"r_{rk}")
+            
+            old_sc = ", ".join(current_data.get("scorers", []))
+            sc_input = st.text_area("得点者 (カンマ区切り)", value=old_sc, key=f"txt_{rk}")
+            
+            if st.button("この試合を保存", key=f"btn_{rk}"):
+                with st.spinner("保存中..."):
+                    # データを辞書にまとめてJSON更新
+                    all_results[rk] = {
+                        "score": f"{new_l}-{new_r}",
+                        "scorers": [s.strip() for s in sc_input.split(",") if s.strip()],
+                        "result": res_val
+                    }
                     ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
-                    st.success("保存完了しました")
+                    st.success("保存しました")
                     time.sleep(0.5)
                     st.rerun()
 
@@ -212,10 +234,9 @@ elif st.session_state.page == "create":
         c_class = st.text_input("試合分類")
         c_memo = st.text_area("備考")
         if st.form_submit_button("試合管理一覧へ登録"):
-            with st.spinner("新規データを登録中..."):
-                new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
-                if add_new_row_strictly_at_blank_top(new_data):
-                    st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
+            new_data = {"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}
+            if add_new_row_strictly_at_blank_top(new_data):
+                st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
 # 一覧画面
 else:
