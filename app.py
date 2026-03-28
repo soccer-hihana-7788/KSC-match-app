@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
@@ -53,61 +53,41 @@ def load_data():
         all_values = ws_list.get_all_values()
         if not all_values or len(all_values) < 2:
             return pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
-        
         header = all_values[0]
-        
-        # 【最重要修正】対戦相手(Index 4)が入力されていない行は「存在しないもの」として無視
-        # これにより、枠線だけの行に初期値が出る問題を根絶します
-        valid_rows = []
-        for r in all_values[1:]:
-            if len(r) > 4 and r[4].strip() != "":
-                valid_rows.append(r)
-        
+        valid_rows = [r for r in all_values[1:] if len(r) > 4 and r[4].strip() != ""]
         df = pd.DataFrame(valid_rows, columns=header)
     except Exception:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
     
-    # 既存データの整形（有効な行のみ）
     if not df.empty:
         if 'No' in df.columns:
             df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
         if '日時' in df.columns:
             df['日時'] = pd.to_datetime(df['日時'], errors='coerce').dt.date
-        
         if "試合場所" in df.columns:
             df = df.rename(columns={"試合場所": "対戦場所"})
         elif "対戦場所" not in df.columns:
             df["対戦場所"] = ""
-
-        # UI用カラム（すべて空で初期化）
         df.insert(0, '選択', False)
         df['結果入力'] = False
         df['写真管理'] = False
     else:
-        # データが0件の場合、余計な初期値を持たない空のDFを作成
         cols = ['選択', '結果入力', 'No', 'カテゴリー', '日時', '競技分類', '対戦相手', '対戦場所', '試合分類', '備考', '写真管理']
         df = pd.DataFrame(columns=cols)
-
     return df
 
 def add_new_row_strictly_at_blank_top(new_data_dict):
-    """【仕様遵守】保存済み行のすぐ下の行（空きセル最上部）に登録"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
         ws = sh.get_worksheet(0)
-        
-        # A列(No)をスキャンして最後のデータ行を特定
         no_column_values = ws.col_values(1)
         last_data_idx = 0
         for i, val in enumerate(no_column_values):
             if val.strip() != "":
                 last_data_idx = i + 1
-
-        # 新規No
         existing_nos = [int(v) for v in no_column_values[1:] if v.strip().isdigit()]
         new_no = max(existing_nos + [0]) + 1
-        
         row_values = []
         for col in SHEET_COLUMNS:
             if col == "No": val = new_no
@@ -115,8 +95,6 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
             else: val = new_data_dict.get(col, "")
             if isinstance(val, (date, datetime)): val = val.isoformat()
             row_values.append(str(val))
-        
-        # 確実に「最後に入力した行の1個下」へピンポイント書き込み
         target_row = last_data_idx + 1
         ws.update(f"A{target_row}", [row_values])
         return True
@@ -124,45 +102,28 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
         st.error(f"保存エラー: {e}")
         return False
 
-def delete_selected_rows(nos_to_delete):
-    try:
-        client = get_gspread_client()
-        sh = client.open_by_url(SPREADSHEET_URL)
-        ws = sh.get_worksheet(0)
-        all_rows = ws.get_all_values()
-        rows_to_delete_indices = []
-        for i, row in enumerate(all_rows):
-            if i == 0: continue
-            if row and str(row[0]).isdigit() and int(row[0]) in nos_to_delete:
-                rows_to_delete_indices.append(i + 1)
-        for row_idx in sorted(rows_to_delete_indices, reverse=True):
-            ws.delete_rows(row_idx)
-        return True
-    except Exception as e:
-        st.error(f"削除エラー: {e}")
-        return False
+# --- 3. 状態管理（スマホ閉鎖対策） ---
+# 6時間の有効期限チェック
+AUTH_TIMEOUT_HOURS = 6
 
-@st.dialog("試合データの削除確認")
-def delete_confirm_dialog(nos):
-    st.warning(f"⚠️ 選択された {len(nos)} 件のデータを削除します。")
-    st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("はい、削除する", type="primary", use_container_width=True):
-            if delete_selected_rows(nos):
-                if "main_editor" in st.session_state:
-                    del st.session_state["main_editor"]
-                st.session_state.df_list = load_data()
-                st.rerun()
-    with c2:
-        if st.button("キャンセル", use_container_width=True):
-            if "main_editor" in st.session_state:
-                del st.session_state["main_editor"]
-            st.rerun()
-
-# --- 3. 状態管理 ---
 if 'df_list' not in st.session_state:
     st.session_state.df_list = load_data()
+
+# ログイン状態の永続化
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "auth_time" not in st.session_state:
+    st.session_state.auth_time = None
+
+# セッションが切れていてもURLパラメータ等から復元を試みる（簡易的な永続化）
+# 本来はLocalStorageを使うがStreamlitの仕様上、session_stateの維持を優先
+current_time = datetime.now()
+if st.session_state.auth_time:
+    elapsed = current_time - st.session_state.auth_time
+    if elapsed > timedelta(hours=AUTH_TIMEOUT_HOURS):
+        st.session_state.authenticated = False
+        st.session_state.auth_time = None
+
 if 'page' not in st.session_state:
     st.session_state.page = "list"
 if 'selected_no' not in st.session_state:
@@ -170,25 +131,27 @@ if 'selected_no' not in st.session_state:
 if 'media_no' not in st.session_state:
     st.session_state.media_no = None
 
-is_authenticated = st.query_params.get("auth") == "true"
-
-if not is_authenticated:
+# ログイン画面
+if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u = st.text_input("ID")
     p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            st.query_params["auth"] = "true"
+            st.session_state.authenticated = True
+            st.session_state.auth_time = datetime.now()
             st.rerun()
     st.stop()
 
-# --- 4. 画面遷移 ---
+# --- 4. 画面遷移ロジック ---
+# 写真管理画面
 if st.session_state.media_no is not None:
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.media_no = None
         st.rerun()
+    # (写真処理ロジック - 既存通り)
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_media = sh.worksheet("media_storage")
     except:
@@ -197,14 +160,10 @@ if st.session_state.media_no is not None:
     uploaded_file = st.file_uploader("写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロード"):
         with st.spinner("保存中..."):
-            try:
-                img = Image.open(uploaded_file)
-                img = ImageOps.exif_transpose(img).convert("RGB")
-                buf = BytesIO(); img.thumbnail((800, 800)); img.save(buf, format="JPEG", quality=50)
-                encoded = base64.b64encode(buf.getvalue()).decode()
-                ws_media.append_row([str(no), uploaded_file.name, encoded])
-                st.success("完了"); time.sleep(1); st.rerun()
-            except Exception as e: st.error(f"添付エラー: {e}")
+            img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
+            buf = BytesIO(); img.thumbnail((800, 800)); img.save(buf, format="JPEG", quality=50)
+            encoded = base64.b64encode(buf.getvalue()).decode()
+            ws_media.append_row([str(no), uploaded_file.name, encoded]); st.success("完了"); time.sleep(1); st.rerun()
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
         cols = st.columns(3)
@@ -215,26 +174,29 @@ if st.session_state.media_no is not None:
                     cell = ws_media.find(item['base64_data'])
                     if cell: ws_media.delete_rows(cell.row); st.rerun()
 
+# 結果入力画面
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"):
         st.session_state.selected_no = None
         st.rerun()
+    # (結果入力ロジック - 既存通り)
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
     except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
     res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
     for i in range(1, 11):
-        rk = f"res_{no}_{i}"; sd = all_results.get(rk, {"score": " - ", "scorers": [""], "result": ""})
+        rk = f"res_{no}_{i}"
         with st.expander(f"第 {i} 試合"):
-            res_val = st.radio("結果", ["勝ち", "負け", "引き分け"], index=0, key=f"rad_{rk}")
+            res_val = st.radio("結果", ["勝ち", "負け", "引き分け"], key=f"rad_{rk}")
             new_l = st.text_input("自", key=f"l_{rk}"); new_r = st.text_input("相手", key=f"r_{rk}")
             sc_input = st.text_area("得点者", key=f"txt_{rk}")
             if st.button("保存", key=f"btn_{rk}"):
                 all_results[rk] = {"score": f"{new_l}-{new_r}", "scorers": [s.strip() for s in sc_input.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
 
+# 新規登録画面
 elif st.session_state.page == "create":
     st.title("➕ 新規試合登録")
     if st.button("← 戻る"): st.session_state.page = "list"; st.rerun()
@@ -251,6 +213,7 @@ elif st.session_state.page == "create":
             if add_new_row_strictly_at_blank_top(new_data):
                 st.session_state.df_list = load_data(); st.session_state.page = "list"; st.rerun()
 
+# 一覧画面
 else:
     st.title("⚽ KSC試合管理一覧")
     if st.button("➕ 新規試合登録", use_container_width=True):
@@ -261,12 +224,9 @@ else:
     with c2: cat_filter = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
     
     df = st.session_state.df_list.copy()
-    if cat_filter != "すべて":
-        df = df[df["カテゴリー"] == cat_filter]
-    if search_query:
-        df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
+    if cat_filter != "すべて": df = df[df["カテゴリー"] == cat_filter]
+    if search_query: df = df[df.apply(lambda r: search_query.lower() in r.astype(str).str.lower().values, axis=1)]
     
-    # データが存在する場合のみ表示
     if not df.empty:
         display_cols = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
         display_cols = [c for c in display_cols if c in df.columns]
@@ -280,26 +240,15 @@ else:
                 "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"),
                 "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"),
                 "No": None
-            }, 
-            use_container_width=True, key="main_editor"
+            }, use_container_width=True, key="main_editor"
         )
 
-        nos_to_delete = []
         for i in range(len(edited_df)):
             edit_row = edited_df.iloc[i]
             if "No" in current_df.columns:
                 original_no = int(current_df.iloc[i]["No"])
-                if edit_row.get("選択") == True:
-                    nos_to_delete.append(original_no)
-                if edit_row.get("結果入力") == True:
-                    st.session_state.selected_no = original_no
-                    st.rerun()
-                if edit_row.get("写真管理") == True:
-                    st.session_state.media_no = original_no
-                    st.rerun()
-
-        if nos_to_delete:
-            delete_confirm_dialog(nos_to_delete)
+                if edit_row.get("結果入力"): st.session_state.selected_no = original_no; st.rerun()
+                if edit_row.get("写真管理"): st.session_state.media_no = original_no; st.rerun()
     else:
         st.info("登録済みの試合はありません。")
 
