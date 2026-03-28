@@ -51,22 +51,26 @@ def load_data():
     ws_list = sh.get_worksheet(0)
     try:
         all_values = ws_list.get_all_values()
-        if not all_values:
+        if not all_values or len(all_values) < 2:
             return pd.DataFrame(columns=SHEET_COLUMNS)
         
         header = all_values[0]
-        # 【修正】Noまたは対戦相手が入力されている有効な行のみを厳密に抽出
+        
+        # 【抜本修正】「対戦相手」と「No」の両方が空の行は、データとして読み込まない
         # これにより、下部の空行にデフォルト値が入るのを防ぎます
         valid_rows = []
         for r in all_values[1:]:
-            if len(r) > 4 and (r[0].strip() != "" or r[4].strip() != ""):
+            # 行の長さが足りない場合や、No(index 0)と対戦相手(index 4)が共に空の場合はスキップ
+            if len(r) > 4:
+                if r[0].strip() == "" and r[4].strip() == "":
+                    continue
                 valid_rows.append(r)
         
         df = pd.DataFrame(valid_rows, columns=header)
     except Exception:
         df = pd.DataFrame(columns=SHEET_COLUMNS)
     
-    # 有効なデータのみ型変換（空行には適用しない）
+    # 既存データの整形（有効な行に対してのみ実施）
     if not df.empty:
         if 'No' in df.columns:
             df['No'] = pd.to_numeric(df['No'], errors='coerce').fillna(0).astype(int)
@@ -79,14 +83,20 @@ def load_data():
         elif "対戦場所" not in df.columns:
             df["対戦場所"] = ""
 
-    # UI用カラムの追加
-    df.insert(0, '選択', False)
-    df['結果入力'] = False
-    df['写真管理'] = False
+        # UI用カラムの追加
+        df.insert(0, '選択', False)
+        df['結果入力'] = False
+        df['写真管理'] = False
+    else:
+        # データが空の場合の初期化
+        df = pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
+        if "試合場所" in df.columns:
+            df = df.rename(columns={"試合場所": "対戦場所"})
+
     return df
 
 def add_new_row_strictly_at_blank_top(new_data_dict):
-    """【維持】記載済み行のすぐ下の行（空きセル最上部）に登録する"""
+    """記載済み行のすぐ下の行（空きセル最上部）に登録する"""
     try:
         client = get_gspread_client()
         sh = client.open_by_url(SPREADSHEET_URL)
@@ -280,7 +290,6 @@ else:
         nos_to_delete = []
         for i in range(len(edited_df)):
             edit_row = edited_df.iloc[i]
-            # エラー防止のため、No列の存在と値をチェック
             if "No" in current_df.columns:
                 original_no = int(current_df.iloc[i]["No"])
                 if edit_row.get("選択") == True:
@@ -294,6 +303,8 @@ else:
 
         if nos_to_delete:
             delete_confirm_dialog(nos_to_delete)
+    else:
+        st.info("登録されている試合データはありません。")
 
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
