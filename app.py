@@ -149,7 +149,9 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
     if is_edit:
         row = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.edit_no].iloc[0]
         default_vals.update({"カテゴリー":row["カテゴリー"], "日時":row["日時"], "競技分類":row["競技分類"], "対戦相手":row["対戦相手"], "対戦場所":row["対戦場所"], "試合分類":row["試合分類"], "備考":row["備考"]})
+    
     if st.button("← 戻る"): st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
+    
     with st.form("edit_form"):
         c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"], index=["U8", "U9", "U10", "U11", "U12"].index(default_vals["カテゴリー"]))
         c_date = st.date_input("日時", value=default_vals["日時"])
@@ -160,18 +162,19 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
         c_memo = st.text_area("備考", value=default_vals["備考"])
         # 写真管理チェックボックス
         go_to_media = st.checkbox("写真管理 (写真を追加する)")
-        if st.form_submit_button("登録"):
+        
+        submitted = st.form_submit_button("登録")
+        if submitted:
             res_no = update_or_add_row({"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}, target_no=st.session_state.edit_no)
             if res_no:
                 st.session_state.df_list = load_data()
+                st.session_state.edit_no = None
+                st.session_state.page = "list"
+                # ここで抜本的に遷移先を判定
                 if go_to_media:
-                    # 登録後、直接写真管理画面へ遷移するよう修正
                     st.session_state.media_no = int(res_no)
-                    st.session_state.edit_no = None
-                    st.session_state.page = "list"
                 else:
-                    st.session_state.page = "list"
-                    st.session_state.edit_no = None
+                    st.session_state.media_no = None
                 sync_state_to_storage(); st.rerun()
 
 # 写真管理
