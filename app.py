@@ -99,7 +99,7 @@ def update_or_add_row(data_dict, target_no=None):
         no_vals = ws.col_values(1)
         if target_no:
             cell = ws.find(str(target_no))
-            if not cell: return False
+            if not cell: return None
             target_row = cell.row; new_no = target_no
         else:
             last_idx = 0
@@ -113,7 +113,7 @@ def update_or_add_row(data_dict, target_no=None):
             elif col == "試合場所": val = data_dict.get("対戦場所", "")
             else: val = data_dict.get(col, "")
             row.append(str(val.isoformat() if isinstance(val, (date, datetime)) else val))
-        ws.update(f"A{target_row}", [row]); return new_no # new_noを返すように変更
+        ws.update(f"A{target_row}", [row]); return new_no
     except Exception as e:
         st.error(f"保存エラー: {e}"); return None
 
@@ -158,17 +158,17 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
         c_loc = st.text_input("対戦場所", value=default_vals["対戦場所"])
         c_class = st.text_input("試合分類", value=default_vals["試合分類"])
         c_memo = st.text_area("備考", value=default_vals["備考"])
-        # --- 追加箇所: 写真管理チェックボックス ---
+        # 写真管理チェックボックス
         go_to_media = st.checkbox("写真管理 (写真を追加する)")
-        # ----------------------------------------
         if st.form_submit_button("登録"):
             res_no = update_or_add_row({"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}, target_no=st.session_state.edit_no)
             if res_no:
                 st.session_state.df_list = load_data()
                 if go_to_media:
-                    st.session_state.media_no = res_no
-                    st.session_state.page = "list"
+                    # 登録後、直接写真管理画面へ遷移するよう修正
+                    st.session_state.media_no = int(res_no)
                     st.session_state.edit_no = None
+                    st.session_state.page = "list"
                 else:
                     st.session_state.page = "list"
                     st.session_state.edit_no = None
