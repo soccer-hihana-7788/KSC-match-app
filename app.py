@@ -14,7 +14,6 @@ import time
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
-# スタイル設定
 st.markdown("""
     <style>
     div.stButton > button:first-child {
@@ -165,7 +164,7 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
 
 # 写真管理
 elif st.session_state.media_no is not None:
-    no = st.session_state.media_no; st.title(f"🖼️ 写真管理 (No.{no})")
+    no = st.session_state.media_no; st.title("🖼️ 写真管理")
     if st.button("← 一覧に戻る"): st.session_state.media_no = None; sync_state_to_storage(); st.rerun()
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_media = sh.worksheet("media_storage")
@@ -174,11 +173,12 @@ elif st.session_state.media_no is not None:
     if uploaded_file and st.button("アップロードを実行"):
         with st.spinner("最適化中..."):
             img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB"); q=60; img.thumbnail((600,600))
-            for _ in range(5):
+            for _ in range(7):
                 buf=BytesIO(); img.save(buf, format="JPEG", quality=q); enc=base64.b64encode(buf.getvalue()).decode()
-                if len(enc)<49000: break
-                q-=15; img.thumbnail((img.size[0]*0.8, img.size[1]*0.8))
-            ws_media.append_row([str(no), uploaded_file.name, enc]); st.success("完了"); st.rerun()
+                if len(enc)<48000: break
+                q-=10; img.thumbnail((img.size[0]*0.9, img.size[1]*0.9))
+            if len(enc) >= 50000: st.error("サイズ超過。別の画像をお試しください。")
+            else: ws_media.append_row([str(no), uploaded_file.name, enc]); st.success("完了"); st.rerun()
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
         cols = st.columns(3)
@@ -190,7 +190,7 @@ elif st.session_state.media_no is not None:
 
 # 結果入力
 elif st.session_state.selected_no is not None:
-    no = st.session_state.selected_no; st.title(f"📝 試合結果入力 (No.{no})")
+    no = st.session_state.selected_no; st.title("📝 試合結果入力")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; sync_state_to_storage(); st.rerun()
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
@@ -198,16 +198,16 @@ elif st.session_state.selected_no is not None:
     res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
     for i in range(1, 11):
         rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": " - ", "scorers": [], "result": ""})
-        h_txt = f"第 {i} 試合" + (f" （{curr['result']} {curr['score']}）" if curr['result'] else "")
+        # 安全な取得に変更
+        c_res = curr.get("result", "")
+        h_txt = f"第 {i} 試合" + (f" （{c_res} {curr['score']}）" if c_res else "")
         with st.expander(h_txt):
-            r_opts = ["勝ち", "負け", "引き分け"]; r_idx = r_opts.index(curr["result"]) if curr["result"] in r_opts else 0
+            r_opts = ["勝ち", "負け", "引き分け"]; r_idx = r_opts.index(c_res) if c_res in r_opts else 0
             res_val = st.radio("結果", r_opts, index=r_idx, key=f"rad_{rk}")
             s_p = curr["score"].split("-"); l_v = s_p[0].strip() if len(s_p)>0 else ""; r_v = s_p[1].strip() if len(s_p)>1 else ""
             cl, cr = st.columns(2)
-            with cl:
-                nl = st.text_input("自", value=l_v, key=f"l_{rk}")
-            with cr:
-                nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
+            with cl: nl = st.text_input("自", value=l_v, key=f"l_{rk}")
+            with cr: nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
             sc_in = st.text_area("得点者", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
             if st.button("保存", key=f"btn_{rk}"):
                 all_results[rk] = {"score": f"{nl}-{nr}", "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], "result": res_val}
@@ -217,7 +217,7 @@ elif st.session_state.selected_no is not None:
 else:
     st.title("⚽ KSC試合管理一覧")
     if st.session_state.action_no:
-        st.warning(f"No.{st.session_state.action_no} に対する操作を選択")
+        st.warning("選択した試合に対する操作を選択してください")
         ca1, ca2, ca3 = st.columns(3)
         with ca1:
             if st.button("修正", use_container_width=True): st.session_state.edit_no = st.session_state.action_no; st.session_state.action_no = None; sync_state_to_storage(); st.rerun()
@@ -230,20 +230,28 @@ else:
             if st.button("キャンセル", use_container_width=True): st.session_state.action_no = None; st.rerun()
     if st.button("➕ 新規試合登録", use_container_width=True): st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     
-    # --- 修正箇所: 構文エラーを解消 ---
     c1, c2 = st.columns([2, 1])
-    with c1:
-        sq = st.text_input("🔍 検索")
-    with c2:
-        cf = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
-    # ------------------------------
+    with c1: sq = st.text_input("🔍 検索")
+    with c2: cf = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
 
     df = st.session_state.df_list.copy()
     if cf != "すべて": df = df[df["カテゴリー"] == cf]
     if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
+    
     if not df.empty:
-        disp = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
-        edf = st.data_editor(df[disp].reset_index(drop=True), hide_index=True, column_config={"選択": st.column_config.CheckboxColumn("選択", width="small"), "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"), "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"), "No": None}, use_container_width=True, key="main_editor")
+        # No列を非表示にするためにリストから除外または設定で消す
+        disp = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+        # 内部処理用にNoは保持するが、column_configで非表示化
+        edf = st.data_editor(df[['No'] + disp].reset_index(drop=True), hide_index=True, 
+            column_config={
+                "No": None, # ここで完全に非表示化
+                "選択": st.column_config.CheckboxColumn("選択", width="small"), 
+                "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"), 
+                "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), 
+                "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
+            }, 
+            use_container_width=True, key="main_editor")
+        
         for i in range(len(edf)):
             row = edf.iloc[i]
             if row.get("選択"): st.session_state.action_no = int(row["No"]); st.rerun()
@@ -252,5 +260,5 @@ else:
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
         if not df.empty:
-            p_df = df[disp].drop(columns=['選択', '結果入力', '写真管理', 'No'])
+            p_df = df[disp]
             components.html(f"<html><body>{p_df.to_html(index=False)}<script>window.print()</script></body></html>", height=0)
