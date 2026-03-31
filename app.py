@@ -113,9 +113,9 @@ def update_or_add_row(data_dict, target_no=None):
             elif col == "試合場所": val = data_dict.get("対戦場所", "")
             else: val = data_dict.get(col, "")
             row.append(str(val.isoformat() if isinstance(val, (date, datetime)) else val))
-        ws.update(f"A{target_row}", [row]); return True
+        ws.update(f"A{target_row}", [row]); return new_no # new_noを返すように変更
     except Exception as e:
-        st.error(f"保存エラー: {e}"); return False
+        st.error(f"保存エラー: {e}"); return None
 
 # --- 4. 状態管理 ---
 AUTH_TIMEOUT_HOURS = 6
@@ -158,9 +158,21 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
         c_loc = st.text_input("対戦場所", value=default_vals["対戦場所"])
         c_class = st.text_input("試合分類", value=default_vals["試合分類"])
         c_memo = st.text_area("備考", value=default_vals["備考"])
+        # --- 追加箇所: 写真管理チェックボックス ---
+        go_to_media = st.checkbox("写真管理 (写真を追加する)")
+        # ----------------------------------------
         if st.form_submit_button("登録"):
-            if update_or_add_row({"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}, target_no=st.session_state.edit_no):
-                st.session_state.df_list = load_data(); st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
+            res_no = update_or_add_row({"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}, target_no=st.session_state.edit_no)
+            if res_no:
+                st.session_state.df_list = load_data()
+                if go_to_media:
+                    st.session_state.media_no = res_no
+                    st.session_state.page = "list"
+                    st.session_state.edit_no = None
+                else:
+                    st.session_state.page = "list"
+                    st.session_state.edit_no = None
+                sync_state_to_storage(); st.rerun()
 
 # 写真管理
 elif st.session_state.media_no is not None:
@@ -198,7 +210,6 @@ elif st.session_state.selected_no is not None:
     res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
     for i in range(1, 11):
         rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": " - ", "scorers": [], "result": ""})
-        # 安全な取得に変更
         c_res = curr.get("result", "")
         h_txt = f"第 {i} 試合" + (f" （{c_res} {curr['score']}）" if c_res else "")
         with st.expander(h_txt):
@@ -239,12 +250,10 @@ else:
     if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
     
     if not df.empty:
-        # No列を非表示にするためにリストから除外または設定で消す
         disp = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
-        # 内部処理用にNoは保持するが、column_configで非表示化
         edf = st.data_editor(df[['No'] + disp].reset_index(drop=True), hide_index=True, 
             column_config={
-                "No": None, # ここで完全に非表示化
+                "No": None,
                 "選択": st.column_config.CheckboxColumn("選択", width="small"), 
                 "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"), 
                 "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), 
