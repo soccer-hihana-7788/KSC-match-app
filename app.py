@@ -102,10 +102,9 @@ def add_new_row_strictly_at_blank_top(new_data_dict):
         st.error(f"保存エラー: {e}")
         return False
 
-# --- 3. 状態管理（6時間維持の抜本強化） ---
+# --- 3. 状態管理（6時間維持） ---
 AUTH_TIMEOUT_HOURS = 6
 
-# URLパラメータから認証復元を試みる
 if "authenticated" not in st.session_state:
     if st.query_params.get("ksc_auth") == "true":
         st.session_state.authenticated = True
@@ -128,7 +127,7 @@ if 'selected_no' not in st.session_state:
 if 'media_no' not in st.session_state:
     st.session_state.media_no = None
 
-# ログイン画面
+# ログイン
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u = st.text_input("ID")
@@ -137,13 +136,12 @@ if not st.session_state.authenticated:
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
             st.session_state.authenticated = True
             st.session_state.auth_time = datetime.now()
-            # 6時間維持のためにパラメータを付与
             st.query_params["ksc_auth"] = "true"
             st.rerun()
     st.stop()
 
 # --- 4. 画面遷移 ---
-# 写真管理（アップロード機能の完全復旧）
+# 写真管理（50,000文字制限対策版）
 if st.session_state.media_no is not None:
     no = st.session_state.media_no
     st.title(f"🖼️ 写真管理 (No.{no})")
@@ -160,20 +158,36 @@ if st.session_state.media_no is not None:
     uploaded_file = st.file_uploader("写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file:
         if st.button("アップロードを実行"):
-            with st.spinner("スプレッドシートに転送中..."):
+            with st.spinner("画像を最適化して保存中..."):
                 try:
                     img = Image.open(uploaded_file)
                     img = ImageOps.exif_transpose(img).convert("RGB")
-                    buf = BytesIO()
-                    img.thumbnail((800, 800))
-                    img.save(buf, format="JPEG", quality=60)
-                    encoded = base64.b64encode(buf.getvalue()).decode()
-                    ws_media.append_row([str(no), uploaded_file.name, encoded])
-                    st.success("アップロード完了！")
-                    time.sleep(1)
-                    st.rerun()
+                    
+                    # 【抜本的改善】50,000文字制限を確実に回避するための再帰的圧縮
+                    quality = 60
+                    size = (600, 600) # スマホ閲覧に十分なサイズへ変更
+                    img.thumbnail(size)
+                    
+                    encoded = ""
+                    for attempt in range(5): # 最大5回まで圧縮を試行
+                        buf = BytesIO()
+                        img.save(buf, format="JPEG", quality=quality)
+                        encoded = base64.b64encode(buf.getvalue()).decode()
+                        
+                        if len(encoded) < 49000: # 制限の50,000字以下ならOK
+                            break
+                        quality -= 15 # 制限を超えている場合は画質を下げてリトライ
+                        img.thumbnail((img.size[0]*0.8, img.size[1]*0.8)) # サイズも縮小
+
+                    if len(encoded) >= 50000:
+                        st.error("写真が大きすぎます。別の写真を選択するか、サイズを小さくしてください。")
+                    else:
+                        ws_media.append_row([str(no), uploaded_file.name, encoded])
+                        st.success("アップロード完了！")
+                        time.sleep(1)
+                        st.rerun()
                 except Exception as e:
-                    st.error(f"アップロード失敗: {e}")
+                    st.error(f"保存に失敗しました: {e}")
 
     match_photos = [r for r in ws_media.get_all_records() if str(r.get('match_no')) == str(no)]
     if match_photos:
@@ -212,7 +226,7 @@ elif st.session_state.selected_no is not None:
             with c_r: nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
             sc_in = st.text_area("得点者", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
             if st.button("保存", key=f"btn_{rk}"):
-                all_results[rk] = {"score": f"{nl}-{nr}", "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], "result": res_val}
+                all_results[rk] = {"score": NL+"-"+NR, "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); time.sleep(0.5); st.rerun()
 
 # 新規登録
