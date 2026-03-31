@@ -188,7 +188,7 @@ elif st.session_state.media_no is not None:
                 if st.button("削除", key=f"del_{idx}"):
                     cell=ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
-# 結果入力 (SyntaxErrorを修正)
+# 結果入力
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no; st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; sync_state_to_storage(); st.rerun()
@@ -204,12 +204,10 @@ elif st.session_state.selected_no is not None:
             res_val = st.radio("結果", r_opts, index=r_idx, key=f"rad_{rk}")
             s_p = curr["score"].split("-"); l_v = s_p[0].strip() if len(s_p)>0 else ""; r_v = s_p[1].strip() if len(s_p)>1 else ""
             cl, cr = st.columns(2)
-            # --- 修正箇所: 構文エラーを解消 ---
             with cl:
                 nl = st.text_input("自", value=l_v, key=f"l_{rk}")
             with cr:
                 nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
-            # ------------------------------
             sc_in = st.text_area("得点者", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
             if st.button("保存", key=f"btn_{rk}"):
                 all_results[rk] = {"score": f"{nl}-{nr}", "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], "result": res_val}
@@ -231,8 +229,15 @@ else:
         with ca3:
             if st.button("キャンセル", use_container_width=True): st.session_state.action_no = None; st.rerun()
     if st.button("➕ 新規試合登録", use_container_width=True): st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
+    
+    # --- 修正箇所: 構文エラーを解消 ---
     c1, c2 = st.columns([2, 1])
-    with c1: sq = st.text_input("🔍 検索"); with c2: cf = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
+    with c1:
+        sq = st.text_input("🔍 検索")
+    with c2:
+        cf = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
+    # ------------------------------
+
     df = st.session_state.df_list.copy()
     if cf != "すべて": df = df[df["カテゴリー"] == cf]
     if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
