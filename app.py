@@ -14,8 +14,10 @@ import time
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
+# メインボタン（濃いオレンジ）と削除・キャンセルボタン（グレー）のスタイル
 st.markdown("""
     <style>
+    /* メインボタン: 濃いオレンジ */
     div.stButton > button:first-child {
         background-color: #d35400;
         color: white;
@@ -26,6 +28,14 @@ st.markdown("""
     div.stButton > button:hover {
         background-color: #a04000;
         color: white;
+    }
+    /* 削除・キャンセル用グレーボタンの特定スタイル (data-testidで指定) */
+    div[data-testid="stHorizontalBlock"] div.stButton > button {
+        background-color: #767676 !important;
+        color: white !important;
+    }
+    div[data-testid="stHorizontalBlock"] div.stButton > button:hover {
+        background-color: #5a5a5a !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -124,7 +134,6 @@ if 'selected_no' not in st.session_state:
     st.session_state.selected_no = None
 if 'media_no' not in st.session_state:
     st.session_state.media_no = None
-# 削除用ポップアップ管理
 if 'delete_no' not in st.session_state:
     st.session_state.delete_no = None
 
@@ -221,18 +230,18 @@ elif st.session_state.page == "create":
 else:
     st.title("⚽ KSC試合管理一覧")
     
-    # 【修正】削除確認ポップアップ表示
+    # 削除確認ポップアップ（グレーボタン仕様）
     if st.session_state.delete_no is not None:
         st.warning(f"No.{st.session_state.delete_no} の試合データを削除しますか？")
         col_del1, col_del2 = st.columns(2)
         with col_del1:
-            if st.button("❌ 削除", use_container_width=True):
+            if st.button("削除", use_container_width=True, key="pop_del_btn"):
                 client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL); ws = sh.get_worksheet(0)
                 cell = ws.find(str(st.session_state.delete_no))
                 if cell: ws.delete_rows(cell.row)
                 st.session_state.delete_no = None; st.session_state.df_list = load_data(); st.rerun()
         with col_del2:
-            if st.button("キャンセル", use_container_width=True):
+            if st.button("キャンセル", use_container_width=True, key="pop_cancel_btn"):
                 st.session_state.delete_no = None; st.rerun()
 
     if st.button("➕ 新規試合登録", use_container_width=True):
@@ -257,7 +266,6 @@ else:
         
         for i in range(len(edf)):
             row = edf.iloc[i]
-            # 【修正】選択チェックが入ったら削除ポップアップ用フラグを立てる
             if row.get("選択"): st.session_state.delete_no = int(row["No"]); st.rerun()
             if row.get("結果入力"): st.session_state.selected_no = int(row["No"]); st.rerun()
             if row.get("写真管理"): st.session_state.media_no = int(row["No"]); st.rerun()
