@@ -28,7 +28,6 @@ st.markdown("""
         background-color: #a04000;
         color: white;
     }
-    /* 選択アクション用グレーボタン */
     div[data-testid="stHorizontalBlock"] div.stButton > button {
         background-color: #767676 !important;
         color: white !important;
@@ -99,29 +98,23 @@ def update_or_add_row(data_dict, target_no=None):
     try:
         client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL); ws = sh.get_worksheet(0)
         no_vals = ws.col_values(1)
-        
-        if target_no: # 修正モード
+        if target_no:
             cell = ws.find(str(target_no))
             if not cell: return False
-            target_row = cell.row
-            new_no = target_no
-        else: # 新規登録モード
+            target_row = cell.row; new_no = target_no
+        else:
             last_idx = 0
             for i, val in enumerate(no_vals):
                 if val.strip() != "": last_idx = i + 1
             existing_nos = [int(v) for v in no_vals[1:] if v.strip().isdigit()]
-            new_no = max(existing_nos + [0]) + 1
-            target_row = last_idx + 1
-
+            new_no = max(existing_nos + [0]) + 1; target_row = last_idx + 1
         row = []
         for col in SHEET_COLUMNS:
             if col == "No": val = new_no
             elif col == "試合場所": val = data_dict.get("対戦場所", "")
             else: val = data_dict.get(col, "")
             row.append(str(val.isoformat() if isinstance(val, (date, datetime)) else val))
-        
-        ws.update(f"A{target_row}", [row])
-        return True
+        ws.update(f"A{target_row}", [row]); return True
     except Exception as e:
         st.error(f"保存エラー: {e}"); return False
 
@@ -136,8 +129,8 @@ if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
 if 'page' not in st.session_state: st.session_state.page = "list"
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
-if 'action_no' not in st.session_state: st.session_state.action_no = None # 選択アクション用
-if 'edit_no' not in st.session_state: st.session_state.edit_no = None # 修正対象No
+if 'action_no' not in st.session_state: st.session_state.action_no = None
+if 'edit_no' not in st.session_state: st.session_state.edit_no = None
 
 # ログイン
 if not st.session_state.authenticated:
@@ -150,20 +143,14 @@ if not st.session_state.authenticated:
     st.stop()
 
 # --- 5. 画面遷移 ---
-# 修正・新規登録画面
+# 修正・新規登録
 if st.session_state.page == "create" or st.session_state.edit_no is not None:
-    is_edit = st.session_state.edit_no is not None
-    st.title("📝 試合情報の" + ("修正" if is_edit else "新規登録"))
-    
-    # 修正時の初期値取得
+    is_edit = st.session_state.edit_no is not None; st.title("📝 試合情報の" + ("修正" if is_edit else "新規登録"))
     default_vals = {"カテゴリー":"U12", "日時":date.today(), "競技分類":"サッカー", "対戦相手":"", "対戦場所":"", "試合分類":"", "備考":""}
     if is_edit:
         row = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.edit_no].iloc[0]
         default_vals.update({"カテゴリー":row["カテゴリー"], "日時":row["日時"], "競技分類":row["競技分類"], "対戦相手":row["対戦相手"], "対戦場所":row["対戦場所"], "試合分類":row["試合分類"], "備考":row["備考"]})
-
-    if st.button("← 戻る"): 
-        st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
-    
+    if st.button("← 戻る"): st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     with st.form("edit_form"):
         c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"], index=["U8", "U9", "U10", "U11", "U12"].index(default_vals["カテゴリー"]))
         c_date = st.date_input("日時", value=default_vals["日時"])
@@ -186,8 +173,7 @@ elif st.session_state.media_no is not None:
     uploaded_file = st.file_uploader("写真を選択", type=["png", "jpg", "jpeg"])
     if uploaded_file and st.button("アップロードを実行"):
         with st.spinner("最適化中..."):
-            img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB")
-            q=60; img.thumbnail((600,600))
+            img = Image.open(uploaded_file); img = ImageOps.exif_transpose(img).convert("RGB"); q=60; img.thumbnail((600,600))
             for _ in range(5):
                 buf=BytesIO(); img.save(buf, format="JPEG", quality=q); enc=base64.b64encode(buf.getvalue()).decode()
                 if len(enc)<49000: break
@@ -202,7 +188,7 @@ elif st.session_state.media_no is not None:
                 if st.button("削除", key=f"del_{idx}"):
                     cell=ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
-# 結果入力
+# 結果入力 (SyntaxErrorを修正)
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no; st.title(f"📝 試合結果入力 (No.{no})")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; sync_state_to_storage(); st.rerun()
@@ -218,54 +204,46 @@ elif st.session_state.selected_no is not None:
             res_val = st.radio("結果", r_opts, index=r_idx, key=f"rad_{rk}")
             s_p = curr["score"].split("-"); l_v = s_p[0].strip() if len(s_p)>0 else ""; r_v = s_p[1].strip() if len(s_p)>1 else ""
             cl, cr = st.columns(2)
-            with cl: nl = st.text_input("自", value=l_v, key=f"l_{rk}"); with cr: nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
+            # --- 修正箇所: 構文エラーを解消 ---
+            with cl:
+                nl = st.text_input("自", value=l_v, key=f"l_{rk}")
+            with cr:
+                nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
+            # ------------------------------
             sc_in = st.text_area("得点者", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
             if st.button("保存", key=f"btn_{rk}"):
                 all_results[rk] = {"score": f"{nl}-{nr}", "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], "result": res_val}
                 ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
 
-# 一覧画面
+# 一覧
 else:
     st.title("⚽ KSC試合管理一覧")
-    
-    # 選択アクションポップアップ（修正ボタン追加）
     if st.session_state.action_no:
-        st.warning(f"No.{st.session_state.action_no} に対してどのアクションを行いますか？")
+        st.warning(f"No.{st.session_state.action_no} に対する操作を選択")
         ca1, ca2, ca3 = st.columns(3)
         with ca1:
-            if st.button("修正", use_container_width=True):
-                st.session_state.edit_no = st.session_state.action_no; st.session_state.action_no = None; sync_state_to_storage(); st.rerun()
+            if st.button("修正", use_container_width=True): st.session_state.edit_no = st.session_state.action_no; st.session_state.action_no = None; sync_state_to_storage(); st.rerun()
         with ca2:
             if st.button("削除", use_container_width=True):
-                client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL); ws = sh.get_worksheet(0)
-                cell = ws.find(str(st.session_state.action_no))
+                client=get_gspread_client(); sh=client.open_by_url(SPREADSHEET_URL); ws=sh.get_worksheet(0); cell=ws.find(str(st.session_state.action_no))
                 if cell: ws.delete_rows(cell.row)
                 st.session_state.action_no = None; st.session_state.df_list = load_data(); st.rerun()
         with ca3:
             if st.button("キャンセル", use_container_width=True): st.session_state.action_no = None; st.rerun()
-
-    if st.button("➕ 新規試合登録", use_container_width=True):
-        st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
-    
+    if st.button("➕ 新規試合登録", use_container_width=True): st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     c1, c2 = st.columns([2, 1])
     with c1: sq = st.text_input("🔍 検索"); with c2: cf = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
-    
     df = st.session_state.df_list.copy()
     if cf != "すべて": df = df[df["カテゴリー"] == cf]
     if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
-    
     if not df.empty:
         disp = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理', 'No']
-        edf = st.data_editor(df[disp].reset_index(drop=True), hide_index=True, 
-            column_config={"選択": st.column_config.CheckboxColumn("選択", width="small"), "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"), "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"), "No": None}, 
-            use_container_width=True, key="main_editor")
-        
+        edf = st.data_editor(df[disp].reset_index(drop=True), hide_index=True, column_config={"選択": st.column_config.CheckboxColumn("選択", width="small"), "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"), "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"), "No": None}, use_container_width=True, key="main_editor")
         for i in range(len(edf)):
             row = edf.iloc[i]
             if row.get("選択"): st.session_state.action_no = int(row["No"]); st.rerun()
             if row.get("結果入力"): st.session_state.selected_no = int(row["No"]); sync_state_to_storage(); st.rerun()
             if row.get("写真管理"): st.session_state.media_no = int(row["No"]); sync_state_to_storage(); st.rerun()
-    else: st.info("登録済みの試合はありません。")
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
         if not df.empty:
