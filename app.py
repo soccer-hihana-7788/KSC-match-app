@@ -152,6 +152,7 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
     
     if st.button("← 戻る"): st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     
+    # 抜本的修正：フォームを分割してチェックボックスをフォームの外へ
     with st.form("edit_form"):
         c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"], index=["U8", "U9", "U10", "U11", "U12"].index(default_vals["カテゴリー"]))
         c_date = st.date_input("日時", value=default_vals["日時"])
@@ -160,22 +161,25 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
         c_loc = st.text_input("対戦場所", value=default_vals["対戦場所"])
         c_class = st.text_input("試合分類", value=default_vals["試合分類"])
         c_memo = st.text_area("備考", value=default_vals["備考"])
-        # 写真管理チェックボックス
-        go_to_media = st.checkbox("写真管理 (写真を追加する)")
-        
         submitted = st.form_submit_button("登録")
+        
         if submitted:
             res_no = update_or_add_row({"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}, target_no=st.session_state.edit_no)
             if res_no:
                 st.session_state.df_list = load_data()
                 st.session_state.edit_no = None
                 st.session_state.page = "list"
-                # ここで抜本的に遷移先を判定
-                if go_to_media:
-                    st.session_state.media_no = int(res_no)
-                else:
-                    st.session_state.media_no = None
                 sync_state_to_storage(); st.rerun()
+
+    # フォームのすぐ下に即時実行用のチェックボックスを配置
+    if is_edit:
+        if st.checkbox("写真管理 (写真を追加する)"):
+            st.session_state.media_no = st.session_state.edit_no
+            st.session_state.edit_no = None
+            st.session_state.page = "list"
+            sync_state_to_storage(); st.rerun()
+    else:
+        st.info("※新規登録時は、一度「登録」ボタンを押してから一覧より写真を追加してください。")
 
 # 写真管理
 elif st.session_state.media_no is not None:
