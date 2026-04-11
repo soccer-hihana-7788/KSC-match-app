@@ -34,7 +34,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ブラウザストレージによる状態保持 ---
+# --- 2. ブラウザストレージによる状態保持と自動ログイン ---
 def sync_state_to_storage():
     state_data = {
         "auth": st.session_state.get("authenticated", False),
@@ -47,12 +47,39 @@ def sync_state_to_storage():
     js_code = f"localStorage.setItem('ksc_state', '{json.dumps(state_data)}');"
     components.html(f"<script>{js_code}</script>", height=0)
 
+# ブラウザからログイン情報を読み込むためのコンポーネント
+def load_auth_from_storage():
+    js_load = """
+    <script>
+    const data = localStorage.getItem('ksc_state');
+    if (data) {
+        const parsed = JSON.parse(data);
+        const url = new URL(window.location.href);
+        // パラメータがない場合のみ付与してリロード
+        if (parsed.auth && !url.searchParams.get('ksc_auth')) {
+            url.searchParams.set('ksc_auth', 'true');
+            url.searchParams.set('auth_time', parsed.auth_time);
+            window.location.href = url.href;
+        }
+    }
+    </script>
+    """
+    components.html(js_load, height=0)
+
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
-    if st.query_params.get("ksc_auth") == "true":
-        st.session_state.authenticated = True
-        if "auth_time" not in st.session_state:
-            st.session_state.auth_time = datetime.now()
+    load_auth_from_storage() # 初回起動時にブラウザ保存情報をチェック
+    
+    # URLパラメータ経由でのログイン復元
+    params = st.query_params
+    if params.get("ksc_auth") == "true" and params.get("auth_time"):
+        try:
+            stored_time = datetime.fromisoformat(params.get("auth_time"))
+            if datetime.now() - stored_time < timedelta(hours=6):
+                st.session_state.authenticated = True
+                st.session_state.auth_time = stored_time
+        except:
+            pass
 
 # --- 3. スプレッドシート設定 ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8jh1IeSnu4Afn7a4en7yvLc/edit#gid=0"
@@ -120,9 +147,13 @@ def update_or_add_row(data_dict, target_no=None):
 # --- 4. 状態管理 ---
 AUTH_TIMEOUT_HOURS = 6
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
+
+# 6時間を超えた場合のタイムアウト処理
 if st.session_state.get("auth_time"):
     if datetime.now() - st.session_state.auth_time > timedelta(hours=AUTH_TIMEOUT_HOURS):
-        st.session_state.authenticated = False; st.query_params.clear()
+        st.session_state.authenticated = False
+        st.query_params.clear()
+        sync_state_to_storage()
 
 if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
 if 'page' not in st.session_state: st.session_state.page = "list"
@@ -131,14 +162,19 @@ if 'media_no' not in st.session_state: st.session_state.media_no = None
 if 'action_no' not in st.session_state: st.session_state.action_no = None
 if 'edit_no' not in st.session_state: st.session_state.edit_no = None
 
-# ログイン
+# ログイン画面
 if not st.session_state.authenticated:
     st.title("⚽ KSCログイン")
     u = st.text_input("ID"); p = st.text_input("PASS", type="password")
     if st.button("ログイン"):
         if u == st.secrets["LOGIN_ID"] and p == st.secrets["LOGIN_PASS"]:
-            st.session_state.authenticated = True; st.session_state.auth_time = datetime.now()
-            st.query_params["ksc_auth"] = "true"; sync_state_to_storage(); st.rerun()
+            now = datetime.now()
+            st.session_state.authenticated = True
+            st.session_state.auth_time = now
+            st.query_params["ksc_auth"] = "true"
+            st.query_params["auth_time"] = now.isoformat()
+            sync_state_to_storage()
+            st.rerun()
     st.stop()
 
 # --- 5. 画面遷移 ---
@@ -152,7 +188,6 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
     
     if st.button("← 戻る"): st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     
-    # 抜本的修正：フォームを分割してチェックボックスをフォームの外へ
     with st.form("edit_form"):
         c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"], index=["U8", "U9", "U10", "U11", "U12"].index(default_vals["カテゴリー"]))
         c_date = st.date_input("日時", value=default_vals["日時"])
@@ -171,7 +206,6 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
                 st.session_state.page = "list"
                 sync_state_to_storage(); st.rerun()
 
-    # フォームのすぐ下に即時実行用のチェックボックスを配置
     if is_edit:
         if st.checkbox("写真管理 (写真を追加する)"):
             st.session_state.media_no = st.session_state.edit_no
