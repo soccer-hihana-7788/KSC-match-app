@@ -42,7 +42,8 @@ def sync_state_to_storage():
         "page": st.session_state.get("page", "list"),
         "selected_no": st.session_state.get("selected_no"),
         "media_no": st.session_state.get("media_no"),
-        "edit_no": st.session_state.get("edit_no")
+        "edit_no": st.session_state.get("edit_no"),
+        "selected_year": st.session_state.get("selected_year") # 年度を保持
     }
     js_code = f"localStorage.setItem('ksc_state', '{json.dumps(state_data)}');"
     components.html(f"<script>{js_code}</script>", height=0)
@@ -57,9 +58,9 @@ def load_auth_from_storage():
         if (parsed.auth && !url.searchParams.get('ksc_auth')) {
             url.searchParams.set('ksc_auth', 'true');
             url.searchParams.set('auth_time', parsed.auth_time);
-            // ページ状態や選択中のNoもパラメータで引き継ぐ
             if(parsed.page) url.searchParams.set('p', parsed.page);
             if(parsed.selected_no) url.searchParams.set('s_no', parsed.selected_no);
+            if(parsed.selected_year) url.searchParams.set('s_year', parsed.selected_year);
             window.location.href = url.href;
         }
     }
@@ -78,9 +79,9 @@ if "initialized" not in st.session_state:
             if datetime.now() - stored_time < timedelta(hours=6):
                 st.session_state.authenticated = True
                 st.session_state.auth_time = stored_time
-                # 画面状態の復元
                 if params.get("p"): st.session_state.page = params.get("p")
                 if params.get("s_no"): st.session_state.selected_no = int(params.get("s_no"))
+                if params.get("s_year"): st.session_state.selected_year = params.get("s_year")
         except:
             pass
 
@@ -97,8 +98,23 @@ def get_gspread_client():
     except Exception as e:
         st.error(f"認証エラー: {e}"); st.stop()
 
+def get_worksheet_name():
+    year = st.session_state.get("selected_year", "2025")
+    return f"list_{year}"
+
 def load_data():
-    client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL); ws_list = sh.get_worksheet(0)
+    client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
+    ws_name = get_worksheet_name()
+    try:
+        ws_list = sh.worksheet(ws_name)
+    except:
+        # シートがない場合は作成（25年度は既存の0番目を使用する互換性維持）
+        if ws_name == "list_2025":
+            ws_list = sh.get_worksheet(0)
+        else:
+            ws_list = sh.add_worksheet(title=ws_name, rows="100", cols=str(len(SHEET_COLUMNS)))
+            ws_list.append_row(SHEET_COLUMNS)
+            
     try:
         all_values = ws_list.get_all_values()
         if not all_values or len(all_values) < 2:
@@ -124,10 +140,10 @@ def load_data():
     return df
 
 def update_or_add_row(data_dict, target_no=None):
-    # 確実性を高めるためのリトライ処理(最大3回)
     for attempt in range(3):
         try:
-            client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL); ws = sh.get_worksheet(0)
+            client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
+            ws = sh.worksheet(get_worksheet_name())
             no_vals = ws.col_values(1)
             if target_no:
                 cell = ws.find(str(target_no))
@@ -153,6 +169,7 @@ def update_or_add_row(data_dict, target_no=None):
 # --- 4. 状態管理 ---
 AUTH_TIMEOUT_HOURS = 6
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
+if "selected_year" not in st.session_state: st.session_state.selected_year = None
 
 if st.session_state.get("auth_time"):
     if datetime.now() - st.session_state.auth_time > timedelta(hours=AUTH_TIMEOUT_HOURS):
@@ -160,7 +177,7 @@ if st.session_state.get("auth_time"):
         st.query_params.clear()
         sync_state_to_storage()
 
-if 'df_list' not in st.session_state: st.session_state.df_list = load_data()
+if 'df_list' not in st.session_state: st.session_state.df_list = pd.DataFrame()
 if 'page' not in st.session_state: st.session_state.page = "list"
 if 'selected_no' not in st.session_state: st.session_state.selected_no = None
 if 'media_no' not in st.session_state: st.session_state.media_no = None
@@ -182,10 +199,52 @@ if not st.session_state.authenticated:
             st.rerun()
     st.stop()
 
+# 年度選択画面 (ログイン後、年度未選択の場合)
+if st.session_state.selected_year is None:
+    st.title("📅 年度選択")
+    st.write("表示または登録する年度を選択してください。")
+    
+    # 既存年度のリストを取得（list_XXXX 形式のシートを探す）
+    client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
+    worksheets = sh.worksheets()
+    existing_years = []
+    for ws in worksheets:
+        if ws.title.startswith("list_"):
+            existing_years.append(ws.title.replace("list_", ""))
+    
+    # デフォルトで25, 26を表示（リストにない場合は追加）
+    for y in ["2025", "2026"]:
+        if y not in existing_years: existing_years.append(y)
+    existing_years = sorted(list(set(existing_years)))
+
+    tabs = st.tabs([f"{y}年度" for y in existing_years])
+    for i, y in enumerate(existing_years):
+        with tabs[i]:
+            if st.button(f"{y}年度の管理画面を開く", key=f"year_btn_{y}"):
+                st.session_state.selected_year = y
+                st.session_state.df_list = load_data()
+                sync_state_to_storage()
+                st.rerun()
+
+    st.markdown("---")
+    with st.expander("➕ 新規年度登録"):
+        new_y = st.text_input("登録する年度（例: 2027）")
+        if st.button("年度を新規作成"):
+            if new_y.isdigit() and len(new_y) == 4:
+                st.session_state.selected_year = new_y
+                st.session_state.df_list = load_data() # これにより自動でシート作成
+                sync_state_to_storage()
+                st.success(f"{new_y}年度を作成しました。")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("4桁の数字で入力してください。")
+    st.stop()
+
 # --- 5. 画面遷移 ---
 # 修正・新規登録
 if st.session_state.page == "create" or st.session_state.edit_no is not None:
-    is_edit = st.session_state.edit_no is not None; st.title("📝 試合情報の" + ("修正" if is_edit else "新規登録"))
+    is_edit = st.session_state.edit_no is not None; st.title(f"📝 {st.session_state.selected_year}年度 試合情報の" + ("修正" if is_edit else "新規登録"))
     default_vals = {"カテゴリー":"U12", "日時":date.today(), "競技分類":"サッカー", "対戦相手":"", "対戦場所":"", "試合分類":"", "備考":""}
     if is_edit:
         target_rows = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.edit_no]
@@ -280,7 +339,16 @@ elif st.session_state.selected_no is not None:
 
 # 一覧
 else:
-    st.title("⚽ KSC試合管理一覧")
+    st.title(f"⚽ KSC試合管理一覧 ({st.session_state.selected_year}年度)")
+    
+    col_nav1, col_nav2 = st.columns([1, 5])
+    with col_nav1:
+        if st.button("📅 年度を変更"):
+            st.session_state.selected_year = None
+            st.session_state.df_list = pd.DataFrame()
+            sync_state_to_storage()
+            st.rerun()
+
     if st.session_state.action_no:
         st.warning("選択した試合に対する操作を選択してください")
         ca1, ca2, ca3 = st.columns(3)
@@ -288,17 +356,21 @@ else:
             if st.button("修正", use_container_width=True): st.session_state.edit_no = st.session_state.action_no; st.session_state.action_no = None; sync_state_to_storage(); st.rerun()
         with ca2:
             if st.button("削除", use_container_width=True):
-                client=get_gspread_client(); sh=client.open_by_url(SPREADSHEET_URL); ws=sh.get_worksheet(0); cell=ws.find(str(st.session_state.action_no))
+                client=get_gspread_client(); sh=client.open_by_url(SPREADSHEET_URL); ws=sh.worksheet(get_worksheet_name()); cell=ws.find(str(st.session_state.action_no))
                 if cell: ws.delete_rows(cell.row)
                 st.session_state.action_no = None; st.session_state.df_list = load_data(); st.rerun()
         with ca3:
             if st.button("キャンセル", use_container_width=True): st.session_state.action_no = None; st.rerun()
+    
     if st.button("➕ 新規試合登録", use_container_width=True): st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     
     c1, c2 = st.columns([2, 1])
     with c1: sq = st.text_input("🔍 検索")
     with c2: cf = st.selectbox("📅 絞り込み", ["すべて", "U8", "U9", "U10", "U11", "U12"])
 
+    if st.session_state.df_list.empty:
+        st.session_state.df_list = load_data()
+        
     df = st.session_state.df_list.copy()
     if cf != "すべて": df = df[df["カテゴリー"] == cf]
     if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
@@ -320,6 +392,9 @@ else:
             if row.get("選択"): st.session_state.action_no = int(row["No"]); st.rerun()
             if row.get("結果入力"): st.session_state.selected_no = int(row["No"]); sync_state_to_storage(); st.rerun()
             if row.get("写真管理"): st.session_state.media_no = int(row["No"]); sync_state_to_storage(); st.rerun()
+    else:
+        st.info("登録されている試合はありません。")
+
     st.markdown("---")
     if st.button("🖨️ 一覧を印刷用表示"):
         if not df.empty:
