@@ -106,7 +106,6 @@ def load_data():
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     ws_name = get_worksheet_name()
     
-    # 既存データの取得元（list_2025 または最初のシート）
     try: ws_2025 = sh.worksheet("list_2025")
     except: ws_2025 = sh.get_worksheet(0)
     data_2025 = ws_2025.get_all_values()
@@ -115,7 +114,6 @@ def load_data():
         ws_list = sh.worksheet(ws_name)
         all_values = ws_list.get_all_values()
         
-        # 2026年度が空、またはヘッダーのみの場合は2025年度のデータをコピー
         if ws_name == "list_2026" and (not all_values or len(all_values) < 2):
             if len(data_2025) >= 2:
                 ws_list.update("A1", data_2025)
@@ -125,9 +123,7 @@ def load_data():
             ws_list = ws_2025
             all_values = data_2025
         else:
-            # 新規シート作成
             ws_list = sh.add_worksheet(title=ws_name, rows="500", cols=str(len(SHEET_COLUMNS)))
-            # 2026年度なら2025のデータをそのまま入れる、それ以外はヘッダーのみ
             init_data = data_2025 if ws_name == "list_2026" and len(data_2025) >= 2 else [SHEET_COLUMNS]
             ws_list.update("A1", init_data)
             all_values = init_data
@@ -159,7 +155,10 @@ def update_or_add_row(data_dict, target_no=None):
     for attempt in range(3):
         try:
             client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
-            ws = sh.worksheet(get_worksheet_name())
+            ws_name = get_worksheet_name()
+            try: ws = sh.worksheet(ws_name)
+            except: ws = sh.get_worksheet(0)
+            
             no_vals = ws.col_values(1)
             if target_no:
                 cell = ws.find(str(target_no))
@@ -236,7 +235,6 @@ if st.session_state.selected_year is None:
         with tabs[i]:
             if st.button(f"{y}年度の管理画面を開く", key=f"year_btn_{y}"):
                 st.session_state.selected_year = y
-                # load_data内で2026年度なら自動的に2025の内容がコピーされる
                 st.session_state.df_list = load_data()
                 sync_state_to_storage()
                 st.rerun()
@@ -256,7 +254,7 @@ if st.session_state.selected_year is None:
                 st.error("4桁の数字で入力してください。")
     st.stop()
 
-# --- 5. 画面遷移 (省略なし) ---
+# --- 5. 画面遷移 ---
 # 修正・新規登録
 if st.session_state.page == "create" or st.session_state.edit_no is not None:
     is_edit = st.session_state.edit_no is not None; st.title(f"📝 {st.session_state.selected_year}年度 試合情報の" + ("修正" if is_edit else "新規登録"))
@@ -368,14 +366,33 @@ else:
         st.warning("選択した試合に対する操作を選択してください")
         ca1, ca2, ca3 = st.columns(3)
         with ca1:
-            if st.button("修正", use_container_width=True): st.session_state.edit_no = st.session_state.action_no; st.session_state.action_no = None; sync_state_to_storage(); st.rerun()
+            if st.button("修正", use_container_width=True): 
+                st.session_state.edit_no = st.session_state.action_no
+                st.session_state.action_no = None
+                sync_state_to_storage()
+                st.rerun()
         with ca2:
             if st.button("削除", use_container_width=True):
-                client=get_gspread_client(); sh=client.open_by_url(SPREADSHEET_URL); ws=sh.worksheet(get_worksheet_name()); cell=ws.find(str(st.session_state.action_no))
-                if cell: ws.delete_rows(cell.row)
-                st.session_state.action_no = None; st.session_state.df_list = load_data(); st.rerun()
+                client = get_gspread_client()
+                sh = client.open_by_url(SPREADSHEET_URL)
+                ws_name = get_worksheet_name()
+                
+                # 修正：指定したシートがない場合は最初のシートを参照する（エラー回避）
+                try: ws = sh.worksheet(ws_name)
+                except: ws = sh.get_worksheet(0)
+                
+                cell = ws.find(str(st.session_state.action_no))
+                if cell:
+                    ws.delete_rows(cell.row)
+                    st.success("削除が完了しました。")
+                
+                st.session_state.action_no = None
+                st.session_state.df_list = load_data()
+                st.rerun()
         with ca3:
-            if st.button("キャンセル", use_container_width=True): st.session_state.action_no = None; st.rerun()
+            if st.button("キャンセル", use_container_width=True): 
+                st.session_state.action_no = None
+                st.rerun()
     
     if st.button("➕ 新規試合登録", use_container_width=True): st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     
