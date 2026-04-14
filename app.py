@@ -34,7 +34,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ブラウザストレージによる状態保持と自動ログイン ---
+# --- 2. ブラウザストレージによる状態保持と自動復旧 ---
 def sync_state_to_storage():
     state_data = {
         "auth": st.session_state.get("authenticated", False),
@@ -47,7 +47,6 @@ def sync_state_to_storage():
     js_code = f"localStorage.setItem('ksc_state', '{json.dumps(state_data)}');"
     components.html(f"<script>{js_code}</script>", height=0)
 
-# ブラウザからログイン情報を読み込むためのコンポーネント
 def load_auth_from_storage():
     js_load = """
     <script>
@@ -55,10 +54,12 @@ def load_auth_from_storage():
     if (data) {
         const parsed = JSON.parse(data);
         const url = new URL(window.location.href);
-        // パラメータがない場合のみ付与してリロード
         if (parsed.auth && !url.searchParams.get('ksc_auth')) {
             url.searchParams.set('ksc_auth', 'true');
             url.searchParams.set('auth_time', parsed.auth_time);
+            // ページ状態や選択中のNoもパラメータで引き継ぐ
+            if(parsed.page) url.searchParams.set('p', parsed.page);
+            if(parsed.selected_no) url.searchParams.set('s_no', parsed.selected_no);
             window.location.href = url.href;
         }
     }
@@ -68,9 +69,8 @@ def load_auth_from_storage():
 
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
-    load_auth_from_storage() # 初回起動時にブラウザ保存情報をチェック
+    load_auth_from_storage()
     
-    # URLパラメータ経由でのログイン復元
     params = st.query_params
     if params.get("ksc_auth") == "true" and params.get("auth_time"):
         try:
@@ -78,6 +78,9 @@ if "initialized" not in st.session_state:
             if datetime.now() - stored_time < timedelta(hours=6):
                 st.session_state.authenticated = True
                 st.session_state.auth_time = stored_time
+                # 画面状態の復元
+                if params.get("p"): st.session_state.page = params.get("p")
+                if params.get("s_no"): st.session_state.selected_no = int(params.get("s_no"))
         except:
             pass
 
@@ -121,34 +124,36 @@ def load_data():
     return df
 
 def update_or_add_row(data_dict, target_no=None):
-    try:
-        client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL); ws = sh.get_worksheet(0)
-        no_vals = ws.col_values(1)
-        if target_no:
-            cell = ws.find(str(target_no))
-            if not cell: return None
-            target_row = cell.row; new_no = target_no
-        else:
-            last_idx = 0
-            for i, val in enumerate(no_vals):
-                if val.strip() != "": last_idx = i + 1
-            existing_nos = [int(v) for v in no_vals[1:] if v.strip().isdigit()]
-            new_no = max(existing_nos + [0]) + 1; target_row = last_idx + 1
-        row = []
-        for col in SHEET_COLUMNS:
-            if col == "No": val = new_no
-            elif col == "試合場所": val = data_dict.get("対戦場所", "")
-            else: val = data_dict.get(col, "")
-            row.append(str(val.isoformat() if isinstance(val, (date, datetime)) else val))
-        ws.update(f"A{target_row}", [row]); return new_no
-    except Exception as e:
-        st.error(f"保存エラー: {e}"); return None
+    # 確実性を高めるためのリトライ処理(最大3回)
+    for attempt in range(3):
+        try:
+            client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL); ws = sh.get_worksheet(0)
+            no_vals = ws.col_values(1)
+            if target_no:
+                cell = ws.find(str(target_no))
+                if not cell: return None
+                target_row = cell.row; new_no = target_no
+            else:
+                last_idx = 0
+                for i, val in enumerate(no_vals):
+                    if val.strip() != "": last_idx = i + 1
+                existing_nos = [int(v) for v in no_vals[1:] if v.strip().isdigit()]
+                new_no = max(existing_nos + [0]) + 1; target_row = last_idx + 1
+            row = []
+            for col in SHEET_COLUMNS:
+                if col == "No": val = new_no
+                elif col == "試合場所": val = data_dict.get("対戦場所", "")
+                else: val = data_dict.get(col, "")
+                row.append(str(val.isoformat() if isinstance(val, (date, datetime)) else val))
+            ws.update(f"A{target_row}", [row]); return new_no
+        except Exception as e:
+            if attempt == 2: st.error(f"保存エラー: {e}"); return None
+            time.sleep(1)
 
 # --- 4. 状態管理 ---
 AUTH_TIMEOUT_HOURS = 6
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 
-# 6時間を超えた場合のタイムアウト処理
 if st.session_state.get("auth_time"):
     if datetime.now() - st.session_state.auth_time > timedelta(hours=AUTH_TIMEOUT_HOURS):
         st.session_state.authenticated = False
@@ -183,8 +188,10 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
     is_edit = st.session_state.edit_no is not None; st.title("📝 試合情報の" + ("修正" if is_edit else "新規登録"))
     default_vals = {"カテゴリー":"U12", "日時":date.today(), "競技分類":"サッカー", "対戦相手":"", "対戦場所":"", "試合分類":"", "備考":""}
     if is_edit:
-        row = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.edit_no].iloc[0]
-        default_vals.update({"カテゴリー":row["カテゴリー"], "日時":row["日時"], "競技分類":row["競技分類"], "対戦相手":row["対戦相手"], "対戦場所":row["対戦場所"], "試合分類":row["試合分類"], "備考":row["備考"]})
+        target_rows = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.edit_no]
+        if not target_rows.empty:
+            row = target_rows.iloc[0]
+            default_vals.update({"カテゴリー":row["カテゴリー"], "日時":row["日時"], "競技分類":row["競技分類"], "対戦相手":row["対戦相手"], "対戦場所":row["対戦場所"], "試合分類":row["試合分類"], "備考":row["備考"]})
     
     if st.button("← 戻る"): st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     
@@ -199,12 +206,16 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
         submitted = st.form_submit_button("登録")
         
         if submitted:
-            res_no = update_or_add_row({"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}, target_no=st.session_state.edit_no)
-            if res_no:
-                st.session_state.df_list = load_data()
-                st.session_state.edit_no = None
-                st.session_state.page = "list"
-                sync_state_to_storage(); st.rerun()
+            with st.spinner("登録中..."):
+                res_no = update_or_add_row({"カテゴリー": c_cat, "日時": c_date, "競技分類": c_type, "対戦相手": c_opp, "対戦場所": c_loc, "試合分類": c_class, "備考": c_memo}, target_no=st.session_state.edit_no)
+                if res_no:
+                    st.session_state.df_list = load_data()
+                    st.session_state.edit_no = None
+                    st.session_state.page = "list"
+                    sync_state_to_storage()
+                    st.success("登録が完了しました。")
+                    time.sleep(1)
+                    st.rerun()
 
     if is_edit:
         if st.checkbox("写真管理 (写真を追加する)"):
@@ -212,8 +223,6 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
             st.session_state.edit_no = None
             st.session_state.page = "list"
             sync_state_to_storage(); st.rerun()
-    else:
-        st.info("※新規登録時は、一度「登録」ボタンを押してから一覧より写真を追加してください。")
 
 # 写真管理
 elif st.session_state.media_no is not None:
@@ -249,11 +258,12 @@ elif st.session_state.selected_no is not None:
     try: ws_res = sh.worksheet("results")
     except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
     res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
+    
     for i in range(1, 11):
         rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": " - ", "scorers": [], "result": ""})
         c_res = curr.get("result", "")
         h_txt = f"第 {i} 試合" + (f" （{c_res} {curr['score']}）" if c_res else "")
-        with st.expander(h_txt):
+        with st.expander(h_txt, expanded=(i==1)):
             r_opts = ["勝ち", "負け", "引き分け"]; r_idx = r_opts.index(c_res) if c_res in r_opts else 0
             res_val = st.radio("結果", r_opts, index=r_idx, key=f"rad_{rk}")
             s_p = curr["score"].split("-"); l_v = s_p[0].strip() if len(s_p)>0 else ""; r_v = s_p[1].strip() if len(s_p)>1 else ""
@@ -262,8 +272,11 @@ elif st.session_state.selected_no is not None:
             with cr: nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
             sc_in = st.text_area("得点者", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
             if st.button("保存", key=f"btn_{rk}"):
-                all_results[rk] = {"score": f"{nl}-{nr}", "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], "result": res_val}
-                ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False)); st.success("保存完了"); st.rerun()
+                with st.spinner("保存中..."):
+                    all_results[rk] = {"score": f"{nl}-{nr}", "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], "result": res_val}
+                    ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
+                    st.success(f"第 {i} 試合の結果を保存しました。")
+                    sync_state_to_storage(); time.sleep(0.5); st.rerun()
 
 # 一覧
 else:
