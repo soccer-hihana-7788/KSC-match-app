@@ -31,6 +31,11 @@ st.markdown("""
         background-color: #767676 !important;
         color: white !important;
     }
+    /* 削除ボタン用のスタイル */
+    .del-btn > div > button {
+        background-color: #c0392b !important;
+        margin-top: 10px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -233,11 +238,25 @@ if st.session_state.selected_year is None:
     tabs = st.tabs([f"{y}年度" for y in existing_years])
     for i, y in enumerate(existing_years):
         with tabs[i]:
-            if st.button(f"{y}年度の管理画面を開く", key=f"year_btn_{y}"):
-                st.session_state.selected_year = y
-                st.session_state.df_list = load_data()
-                sync_state_to_storage()
-                st.rerun()
+            col_sel, col_del = st.columns([3, 1])
+            with col_sel:
+                if st.button(f"{y}年度の管理画面を開く", key=f"year_btn_{y}", use_container_width=True):
+                    st.session_state.selected_year = y
+                    st.session_state.df_list = load_data()
+                    sync_state_to_storage()
+                    st.rerun()
+            with col_del:
+                st.markdown('<div class="del-btn">', unsafe_allow_html=True)
+                if st.button(f"{y}年度を削除", key=f"del_year_{y}", use_container_width=True):
+                    try:
+                        target_ws = sh.worksheet(f"list_{y}")
+                        sh.del_worksheet(target_ws)
+                        st.success(f"{y}年度を削除しました。")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"削除失敗: {e}")
+                st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     with st.expander("➕ 新規年度登録"):
@@ -332,7 +351,7 @@ elif st.session_state.selected_no is not None:
     res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
     
     for i in range(1, 11):
-        rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": " - ", "scorers": [], "result": ""})
+        rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": " - ", "scorers": [], "result": "", "memo": ""})
         c_res = curr.get("result", "")
         h_txt = f"第 {i} 試合" + (f" （{c_res} {curr['score']}）" if c_res else "")
         with st.expander(h_txt, expanded=(i==1)):
@@ -343,9 +362,17 @@ elif st.session_state.selected_no is not None:
             with cl: nl = st.text_input("自", value=l_v, key=f"l_{rk}")
             with cr: nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
             sc_in = st.text_area("得点者", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
+            # 追加：備考欄
+            res_memo = st.text_area("備考", value=curr.get("memo", ""), key=f"memo_{rk}")
+            
             if st.button("保存", key=f"btn_{rk}"):
                 with st.spinner("保存中..."):
-                    all_results[rk] = {"score": f"{nl}-{nr}", "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], "result": res_val}
+                    all_results[rk] = {
+                        "score": f"{nl}-{nr}", 
+                        "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], 
+                        "result": res_val,
+                        "memo": res_memo # 保存データに備考を追加
+                    }
                     ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
                     st.success(f"第 {i} 試合の結果を保存しました。")
                     sync_state_to_storage(); time.sleep(0.5); st.rerun()
@@ -377,7 +404,6 @@ else:
                 sh = client.open_by_url(SPREADSHEET_URL)
                 ws_name = get_worksheet_name()
                 
-                # 修正：指定したシートがない場合は最初のシートを参照する（エラー回避）
                 try: ws = sh.worksheet(ws_name)
                 except: ws = sh.get_worksheet(0)
                 
