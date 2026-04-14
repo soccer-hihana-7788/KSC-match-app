@@ -43,7 +43,7 @@ def sync_state_to_storage():
         "selected_no": st.session_state.get("selected_no"),
         "media_no": st.session_state.get("media_no"),
         "edit_no": st.session_state.get("edit_no"),
-        "selected_year": st.session_state.get("selected_year") # 年度を保持
+        "selected_year": st.session_state.get("selected_year")
     }
     js_code = f"localStorage.setItem('ksc_state', '{json.dumps(state_data)}');"
     components.html(f"<script>{js_code}</script>", height=0)
@@ -105,18 +105,34 @@ def get_worksheet_name():
 def load_data():
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     ws_name = get_worksheet_name()
+    
+    # 既存データの取得元（list_2025 または最初のシート）
+    try: ws_2025 = sh.worksheet("list_2025")
+    except: ws_2025 = sh.get_worksheet(0)
+    data_2025 = ws_2025.get_all_values()
+
     try:
         ws_list = sh.worksheet(ws_name)
+        all_values = ws_list.get_all_values()
+        
+        # 2026年度が空、またはヘッダーのみの場合は2025年度のデータをコピー
+        if ws_name == "list_2026" and (not all_values or len(all_values) < 2):
+            if len(data_2025) >= 2:
+                ws_list.update("A1", data_2025)
+                all_values = data_2025
     except:
-        # シートがない場合は作成（25年度は既存の0番目を使用する互換性維持）
         if ws_name == "list_2025":
-            ws_list = sh.get_worksheet(0)
+            ws_list = ws_2025
+            all_values = data_2025
         else:
-            ws_list = sh.add_worksheet(title=ws_name, rows="100", cols=str(len(SHEET_COLUMNS)))
-            ws_list.append_row(SHEET_COLUMNS)
+            # 新規シート作成
+            ws_list = sh.add_worksheet(title=ws_name, rows="500", cols=str(len(SHEET_COLUMNS)))
+            # 2026年度なら2025のデータをそのまま入れる、それ以外はヘッダーのみ
+            init_data = data_2025 if ws_name == "list_2026" and len(data_2025) >= 2 else [SHEET_COLUMNS]
+            ws_list.update("A1", init_data)
+            all_values = init_data
             
     try:
-        all_values = ws_list.get_all_values()
         if not all_values or len(all_values) < 2:
             return pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
         header = all_values[0]
@@ -199,12 +215,11 @@ if not st.session_state.authenticated:
             st.rerun()
     st.stop()
 
-# 年度選択画面 (ログイン後、年度未選択の場合)
+# 年度選択画面
 if st.session_state.selected_year is None:
     st.title("📅 年度選択")
     st.write("表示または登録する年度を選択してください。")
     
-    # 既存年度のリストを取得（list_XXXX 形式のシートを探す）
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     worksheets = sh.worksheets()
     existing_years = []
@@ -212,7 +227,6 @@ if st.session_state.selected_year is None:
         if ws.title.startswith("list_"):
             existing_years.append(ws.title.replace("list_", ""))
     
-    # デフォルトで25, 26を表示（リストにない場合は追加）
     for y in ["2025", "2026"]:
         if y not in existing_years: existing_years.append(y)
     existing_years = sorted(list(set(existing_years)))
@@ -222,6 +236,7 @@ if st.session_state.selected_year is None:
         with tabs[i]:
             if st.button(f"{y}年度の管理画面を開く", key=f"year_btn_{y}"):
                 st.session_state.selected_year = y
+                # load_data内で2026年度なら自動的に2025の内容がコピーされる
                 st.session_state.df_list = load_data()
                 sync_state_to_storage()
                 st.rerun()
@@ -232,7 +247,7 @@ if st.session_state.selected_year is None:
         if st.button("年度を新規作成"):
             if new_y.isdigit() and len(new_y) == 4:
                 st.session_state.selected_year = new_y
-                st.session_state.df_list = load_data() # これにより自動でシート作成
+                st.session_state.df_list = load_data()
                 sync_state_to_storage()
                 st.success(f"{new_y}年度を作成しました。")
                 time.sleep(1)
@@ -241,7 +256,7 @@ if st.session_state.selected_year is None:
                 st.error("4桁の数字で入力してください。")
     st.stop()
 
-# --- 5. 画面遷移 ---
+# --- 5. 画面遷移 (省略なし) ---
 # 修正・新規登録
 if st.session_state.page == "create" or st.session_state.edit_no is not None:
     is_edit = st.session_state.edit_no is not None; st.title(f"📝 {st.session_state.selected_year}年度 試合情報の" + ("修正" if is_edit else "新規登録"))
