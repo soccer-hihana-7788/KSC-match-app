@@ -31,10 +31,10 @@ st.markdown("""
         background-color: #767676 !important;
         color: white !important;
     }
-    /* 削除ボタン用のスタイル */
-    .del-btn > div > button {
+    /* 削除ボタン用の赤色スタイル（ポップアップ内） */
+    div[data-testid="stPopover"] div.stButton > button {
         background-color: #c0392b !important;
-        margin-top: 10px;
+        color: white !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -231,6 +231,7 @@ if st.session_state.selected_year is None:
         if ws.title.startswith("list_"):
             existing_years.append(ws.title.replace("list_", ""))
     
+    # デフォルトの年度を表示リストに確保
     for y in ["2025", "2026"]:
         if y not in existing_years: existing_years.append(y)
     existing_years = sorted(list(set(existing_years)))
@@ -238,27 +239,15 @@ if st.session_state.selected_year is None:
     tabs = st.tabs([f"{y}年度" for y in existing_years])
     for i, y in enumerate(existing_years):
         with tabs[i]:
-            col_sel, col_del = st.columns([3, 1])
-            with col_sel:
-                if st.button(f"{y}年度の管理画面を開く", key=f"year_btn_{y}", use_container_width=True):
-                    st.session_state.selected_year = y
-                    st.session_state.df_list = load_data()
-                    sync_state_to_storage()
-                    st.rerun()
-            with col_del:
-                st.markdown('<div class="del-btn">', unsafe_allow_html=True)
-                if st.button(f"{y}年度を削除", key=f"del_year_{y}", use_container_width=True):
-                    try:
-                        target_ws = sh.worksheet(f"list_{y}")
-                        sh.del_worksheet(target_ws)
-                        st.success(f"{y}年度を削除しました。")
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"削除失敗: {e}")
-                st.markdown('</div>', unsafe_allow_html=True)
+            if st.button(f"{y}年度の管理画面を開く", key=f"year_btn_{y}", use_container_width=True):
+                st.session_state.selected_year = y
+                st.session_state.df_list = load_data()
+                sync_state_to_storage()
+                st.rerun()
 
     st.markdown("---")
+    
+    # 新規年度登録
     with st.expander("➕ 新規年度登録"):
         new_y = st.text_input("登録する年度（例: 2027）")
         if st.button("年度を新規作成"):
@@ -271,6 +260,23 @@ if st.session_state.selected_year is None:
                 st.rerun()
             else:
                 st.error("4桁の数字で入力してください。")
+
+    # 年度削除ボタン（ポップアップ表示仕様）
+    with st.popover("🗑️ 年度削除", use_container_width=True):
+        st.write("削除する年度を選択してください。")
+        del_tabs = st.tabs([f"{y}年度" for y in existing_years])
+        for i, y in enumerate(existing_years):
+            with del_tabs[i]:
+                st.warning(f"本当に{y}年度の全データを削除しますか？")
+                if st.button(f"{y}年度を削除OK", key=f"del_confirm_{y}", use_container_width=True):
+                    try:
+                        target_ws = sh.worksheet(f"list_{y}")
+                        sh.del_worksheet(target_ws)
+                        st.success(f"{y}年度を削除しました。")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"削除に失敗しました（初期年度など）: {e}")
     st.stop()
 
 # --- 5. 画面遷移 ---
@@ -362,7 +368,7 @@ elif st.session_state.selected_no is not None:
             with cl: nl = st.text_input("自", value=l_v, key=f"l_{rk}")
             with cr: nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
             sc_in = st.text_area("得点者", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
-            # 追加：備考欄
+            # 追加した備考欄
             res_memo = st.text_area("備考", value=curr.get("memo", ""), key=f"memo_{rk}")
             
             if st.button("保存", key=f"btn_{rk}"):
@@ -371,7 +377,7 @@ elif st.session_state.selected_no is not None:
                         "score": f"{nl}-{nr}", 
                         "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], 
                         "result": res_val,
-                        "memo": res_memo # 保存データに備考を追加
+                        "memo": res_memo
                     }
                     ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
                     st.success(f"第 {i} 試合の結果を保存しました。")
