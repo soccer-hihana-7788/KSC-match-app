@@ -41,6 +41,7 @@ st.markdown("""
 
 # --- 2. ブラウザストレージによる状態保持と自動復旧 ---
 def sync_state_to_storage():
+    # 6時間セッション保持と画面復帰のためのデータを保存
     state_data = {
         "auth": st.session_state.get("authenticated", False),
         "auth_time": str(st.session_state.get("auth_time", "")),
@@ -54,18 +55,27 @@ def sync_state_to_storage():
     components.html(f"<script>{js_code}</script>", height=0)
 
 def load_auth_from_storage():
+    # 起動時にlocalStorageから状態を読み込み、URLパラメータ経由でSessionStateへ戻す
     js_load = """
     <script>
     const data = localStorage.getItem('ksc_state');
     if (data) {
         const parsed = JSON.parse(data);
         const url = new URL(window.location.href);
-        if (parsed.auth && !url.searchParams.get('ksc_auth')) {
+        
+        // 認証時間が6時間以内かチェック
+        const authTime = new Date(parsed.auth_time);
+        const now = new Date();
+        const diffHours = (now - authTime) / (1000 * 60 * 60);
+
+        if (parsed.auth && diffHours < 6 && !url.searchParams.get('ksc_auth')) {
             url.searchParams.set('ksc_auth', 'true');
             url.searchParams.set('auth_time', parsed.auth_time);
             if(parsed.page) url.searchParams.set('p', parsed.page);
             if(parsed.selected_no) url.searchParams.set('s_no', parsed.selected_no);
             if(parsed.selected_year) url.searchParams.set('s_year', parsed.selected_year);
+            if(parsed.media_no) url.searchParams.set('m_no', parsed.media_no);
+            if(parsed.edit_no) url.searchParams.set('e_no', parsed.edit_no);
             window.location.href = url.href;
         }
     }
@@ -84,9 +94,12 @@ if "initialized" not in st.session_state:
             if datetime.now() - stored_time < timedelta(hours=6):
                 st.session_state.authenticated = True
                 st.session_state.auth_time = stored_time
+                # 各種状態の復元
                 if params.get("p"): st.session_state.page = params.get("p")
                 if params.get("s_no"): st.session_state.selected_no = int(params.get("s_no"))
                 if params.get("s_year"): st.session_state.selected_year = params.get("s_year")
+                if params.get("m_no"): st.session_state.media_no = int(params.get("m_no"))
+                if params.get("e_no"): st.session_state.edit_no = int(params.get("e_no"))
         except:
             pass
 
@@ -176,7 +189,6 @@ def update_or_add_row(data_dict, target_no=None):
                 existing_nos = [int(v) for v in no_vals[1:] if v.strip().isdigit()]
                 new_no = max(existing_nos + [0]) + 1; target_row = last_idx + 1
 
-            # --- APIError対策: 指定行が現在の行数を超えている場合は行を追加 ---
             if target_row > ws.row_count:
                 ws.add_rows(max(100, target_row - ws.row_count))
 
@@ -196,6 +208,7 @@ AUTH_TIMEOUT_HOURS = 6
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 if "selected_year" not in st.session_state: st.session_state.selected_year = None
 
+# セッションタイムアウトのチェック
 if st.session_state.get("auth_time"):
     if datetime.now() - st.session_state.auth_time > timedelta(hours=AUTH_TIMEOUT_HOURS):
         st.session_state.authenticated = False
@@ -364,7 +377,6 @@ elif st.session_state.selected_no is not None:
             res_val = st.radio("結果", r_opts, index=r_idx, key=f"rad_{rk}")
             s_p = curr["score"].split("-"); l_v = s_p[0].strip() if len(s_p)>0 else ""; r_v = s_p[1].strip() if len(s_p)>1 else ""
             cl, cr = st.columns(2)
-            # --- SyntaxError修正: 1行で記述せず、適切に改行 ---
             with cl:
                 nl = st.text_input("自", value=l_v, key=f"l_{rk}")
             with cr:
@@ -453,7 +465,7 @@ else:
         
         for i in range(len(edf)):
             row = edf.iloc[i]
-            if row.get("選択"): st.session_state.action_no = int(row["No"]); st.rerun()
+            if row.get("選択"): st.session_state.action_no = int(row["No"]); sync_state_to_storage(); st.rerun()
             if row.get("結果入力"): st.session_state.selected_no = int(row["No"]); sync_state_to_storage(); st.rerun()
             if row.get("写真管理"): st.session_state.media_no = int(row["No"]); sync_state_to_storage(); st.rerun()
     else:
