@@ -41,7 +41,6 @@ st.markdown("""
 
 # --- 2. ブラウザストレージによる状態保持と自動復旧 ---
 def sync_state_to_storage():
-    # 6時間セッション保持と画面復帰のためのデータを保存
     state_data = {
         "auth": st.session_state.get("authenticated", False),
         "auth_time": str(st.session_state.get("auth_time", "")),
@@ -55,15 +54,12 @@ def sync_state_to_storage():
     components.html(f"<script>{js_code}</script>", height=0)
 
 def load_auth_from_storage():
-    # 起動時にlocalStorageから状態を読み込み、URLパラメータ経由でSessionStateへ戻す
     js_load = """
     <script>
     const data = localStorage.getItem('ksc_state');
     if (data) {
         const parsed = JSON.parse(data);
         const url = new URL(window.location.href);
-        
-        // 認証時間が6時間以内かチェック
         const authTime = new Date(parsed.auth_time);
         const now = new Date();
         const diffHours = (now - authTime) / (1000 * 60 * 60);
@@ -94,7 +90,6 @@ if "initialized" not in st.session_state:
             if datetime.now() - stored_time < timedelta(hours=6):
                 st.session_state.authenticated = True
                 st.session_state.auth_time = stored_time
-                # 各種状態の復元
                 if params.get("p"): st.session_state.page = params.get("p")
                 if params.get("s_no"): st.session_state.selected_no = int(params.get("s_no"))
                 if params.get("s_year"): st.session_state.selected_year = params.get("s_year")
@@ -208,7 +203,6 @@ AUTH_TIMEOUT_HOURS = 6
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 if "selected_year" not in st.session_state: st.session_state.selected_year = None
 
-# セッションタイムアウトのチェック
 if st.session_state.get("auth_time"):
     if datetime.now() - st.session_state.auth_time > timedelta(hours=AUTH_TIMEOUT_HOURS):
         st.session_state.authenticated = False
@@ -249,18 +243,18 @@ if st.session_state.selected_year is None:
         if ws.title.startswith("list_"):
             existing_years.append(ws.title.replace("list_", ""))
     
+    # 年度を最新順（降順）にソート
     for y in ["2025", "2026"]:
         if y not in existing_years: existing_years.append(y)
-    existing_years = sorted(list(set(existing_years)))
+    existing_years = sorted(list(set(existing_years)), reverse=True)
 
-    tabs = st.tabs([f"{y}年度" for y in existing_years])
-    for i, y in enumerate(existing_years):
-        with tabs[i]:
-            if st.button(f"{y}年度の管理画面を開く", key=f"year_btn_{y}", use_container_width=True):
-                st.session_state.selected_year = y
-                st.session_state.df_list = load_data()
-                sync_state_to_storage()
-                st.rerun()
+    # 年度を縦列に羅列
+    for y in existing_years:
+        if st.button(f"📅 {y}年度の管理画面を開く", key=f"year_btn_{y}", use_container_width=True):
+            st.session_state.selected_year = y
+            st.session_state.df_list = load_data()
+            sync_state_to_storage()
+            st.rerun()
 
     st.markdown("---")
     
@@ -279,19 +273,17 @@ if st.session_state.selected_year is None:
 
     with st.popover("🗑️ 年度削除", use_container_width=True):
         st.write("削除する年度を選択してください。")
-        del_tabs = st.tabs([f"{y}年度" for y in existing_years])
-        for i, y in enumerate(existing_years):
-            with del_tabs[i]:
-                st.warning(f"本当に{y}年度の全データを削除しますか？")
-                if st.button(f"{y}年度を削除OK", key=f"del_confirm_{y}", use_container_width=True):
-                    try:
-                        target_ws = sh.worksheet(f"list_{y}")
-                        sh.del_worksheet(target_ws)
-                        st.success(f"{y}年度を削除しました。")
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"削除に失敗しました（初期年度など）: {e}")
+        for y in existing_years:
+            st.warning(f"本当に{y}年度の全データを削除しますか？")
+            if st.button(f"{y}年度を削除OK", key=f"del_confirm_{y}", use_container_width=True):
+                try:
+                    target_ws = sh.worksheet(f"list_{y}")
+                    sh.del_worksheet(target_ws)
+                    st.success(f"{y}年度を削除しました。")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"削除に失敗しました（初期年度など）: {e}")
     st.stop()
 
 # --- 5. 画面遷移 ---
