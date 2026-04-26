@@ -31,7 +31,6 @@ st.markdown("""
         background-color: #767676 !important;
         color: white !important;
     }
-    /* 削除ボタン用の赤色スタイル（ポップアップ内） */
     div[data-testid="stPopover"] div.stButton > button {
         background-color: #c0392b !important;
         color: white !important;
@@ -143,7 +142,7 @@ def load_data():
             
     try:
         if not all_values or len(all_values) < 2:
-            return pd.DataFrame(columns=['選択', '結果入力'] + SHEET_COLUMNS + ['写真管理'])
+            return pd.DataFrame(columns=['選択', '試合詳細'] + SHEET_COLUMNS + ['写真管理'])
         header = all_values[0]
         valid_rows = [r for r in all_values[1:] if len(r) > 4 and r[4].strip() != ""]
         df = pd.DataFrame(valid_rows, columns=header)
@@ -160,7 +159,7 @@ def load_data():
         elif "対戦場所" not in df.columns:
             df["対戦場所"] = ""
         df.insert(0, '選択', False)
-        df['結果入力'] = False
+        df['試合詳細'] = False
         df['写真管理'] = False
     return df
 
@@ -243,12 +242,10 @@ if st.session_state.selected_year is None:
         if ws.title.startswith("list_"):
             existing_years.append(ws.title.replace("list_", ""))
     
-    # 年度を最新順（降順）にソート
     for y in ["2025", "2026"]:
         if y not in existing_years: existing_years.append(y)
     existing_years = sorted(list(set(existing_years)), reverse=True)
 
-    # 年度を縦列に羅列
     for y in existing_years:
         if st.button(f"📅 {y}年度の管理画面を開く", key=f"year_btn_{y}", use_container_width=True):
             st.session_state.selected_year = y
@@ -353,7 +350,7 @@ elif st.session_state.media_no is not None:
                     cell=ws_media.find(item['base64_data']); ws_media.delete_rows(cell.row); st.rerun()
 
 elif st.session_state.selected_no is not None:
-    no = st.session_state.selected_no; st.title("📝 試合結果入力")
+    no = st.session_state.selected_no; st.title("📝 試合詳細")
     if st.button("← 一覧に戻る"): st.session_state.selected_no = None; sync_state_to_storage(); st.rerun()
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
     try: ws_res = sh.worksheet("results")
@@ -369,10 +366,8 @@ elif st.session_state.selected_no is not None:
             res_val = st.radio("結果", r_opts, index=r_idx, key=f"rad_{rk}")
             s_p = curr["score"].split("-"); l_v = s_p[0].strip() if len(s_p)>0 else ""; r_v = s_p[1].strip() if len(s_p)>1 else ""
             cl, cr = st.columns(2)
-            with cl:
-                nl = st.text_input("自", value=l_v, key=f"l_{rk}")
-            with cr:
-                nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
+            with cl: nl = st.text_input("自", value=l_v, key=f"l_{rk}")
+            with cr: nr = st.text_input("相手", value=r_v, key=f"r_{rk}")
             sc_in = st.text_area("得点者", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
             res_memo = st.text_area("備考", value=curr.get("memo", ""), key=f"memo_{rk}")
             
@@ -413,15 +408,12 @@ else:
                 client = get_gspread_client()
                 sh = client.open_by_url(SPREADSHEET_URL)
                 ws_name = get_worksheet_name()
-                
                 try: ws = sh.worksheet(ws_name)
                 except: ws = sh.get_worksheet(0)
-                
                 cell = ws.find(str(st.session_state.action_no))
                 if cell:
                     ws.delete_rows(cell.row)
                     st.success("削除が完了しました。")
-                
                 st.session_state.action_no = None
                 st.session_state.df_list = load_data()
                 st.rerun()
@@ -444,12 +436,12 @@ else:
     if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
     
     if not df.empty:
-        disp = ['選択', '結果入力', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+        disp = ['選択', '試合詳細', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
         edf = st.data_editor(df[['No'] + disp].reset_index(drop=True), hide_index=True, 
             column_config={
                 "No": None,
                 "選択": st.column_config.CheckboxColumn("選択", width="small"), 
-                "結果入力": st.column_config.CheckboxColumn("結果入力", width="small"), 
+                "試合詳細": st.column_config.CheckboxColumn("試合詳細", width="small"), 
                 "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), 
                 "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
             }, 
@@ -458,7 +450,7 @@ else:
         for i in range(len(edf)):
             row = edf.iloc[i]
             if row.get("選択"): st.session_state.action_no = int(row["No"]); sync_state_to_storage(); st.rerun()
-            if row.get("結果入力"): st.session_state.selected_no = int(row["No"]); sync_state_to_storage(); st.rerun()
+            if row.get("試合詳細"): st.session_state.selected_no = int(row["No"]); sync_state_to_storage(); st.rerun()
             if row.get("写真管理"): st.session_state.media_no = int(row["No"]); sync_state_to_storage(); st.rerun()
     else:
         st.info("登録されている試合はありません。")
