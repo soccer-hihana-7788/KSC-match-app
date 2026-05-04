@@ -215,7 +215,7 @@ if st.session_state.get("auth_time"):
     if datetime.now() - st.session_state.auth_time > timedelta(hours=AUTH_TIMEOUT_HOURS):
         st.session_state.authenticated = False
         st.query_params.clear()
-        # タイムアウト時はストレージもクリア（任意）
+        # タイムアウト時はストレージもクリア
         components.html("<script>localStorage.removeItem('ksc_state');</script>", height=0)
 
 if 'df_list' not in st.session_state: st.session_state.df_list = pd.DataFrame()
@@ -299,6 +299,11 @@ if st.session_state.selected_year is None:
 if st.session_state.page == "create" or st.session_state.edit_no is not None:
     is_edit = st.session_state.edit_no is not None; st.title(f"📝 {st.session_state.selected_year}年度 試合情報の" + ("修正" if is_edit else "新規登録"))
     default_vals = {"カテゴリー":"U12", "日時":date.today(), "競技分類":"サッカー", "対戦相手":"", "対戦場所":"", "試合分類":"", "備考":""}
+    
+    # データの再読み込み（リロード対策）
+    if st.session_state.df_list.empty:
+        st.session_state.df_list = load_data()
+        
     if is_edit:
         target_rows = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.edit_no]
         if not target_rows.empty:
