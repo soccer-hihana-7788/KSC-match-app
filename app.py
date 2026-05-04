@@ -38,7 +38,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ブラウザストレージによる状態保持と自動復旧 ---
+# --- 2. ブラウザストレージによる状態保持と自動復旧 (徹底強化) ---
 def sync_state_to_storage():
     state_data = {
         "auth": st.session_state.get("authenticated", False),
@@ -53,6 +53,7 @@ def sync_state_to_storage():
     components.html(f"<script>{js_code}</script>", height=0)
 
 def load_auth_from_storage():
+    # ページ読み込み時に即座にlocalStorageを確認し、状態があればURLに注入して強制リロードするJS
     js_load = """
     <script>
     const data = localStorage.getItem('ksc_state');
@@ -63,25 +64,31 @@ def load_auth_from_storage():
         const now = new Date();
         const diffHours = (now - authTime) / (1000 * 60 * 60);
 
-        if (parsed.auth && diffHours < 6 && !url.searchParams.get('ksc_auth')) {
-            url.searchParams.set('ksc_auth', 'true');
-            url.searchParams.set('auth_time', parsed.auth_time);
-            if(parsed.page) url.searchParams.set('p', parsed.page);
-            if(parsed.selected_no) url.searchParams.set('s_no', parsed.selected_no);
-            if(parsed.selected_year) url.searchParams.set('s_year', parsed.selected_year);
-            if(parsed.media_no) url.searchParams.set('m_no', parsed.media_no);
-            if(parsed.edit_no) url.searchParams.set('e_no', parsed.edit_no);
-            window.location.href = url.href;
+        // 6時間以内の有効なセッションがある場合
+        if (parsed.auth && diffHours < 6) {
+            // 現在のURLにパラメータがない、もしくは古い場合にのみ更新してリロード
+            if (!url.searchParams.get('ksc_auth') || url.searchParams.get('auth_time') !== parsed.auth_time) {
+                url.searchParams.set('ksc_auth', 'true');
+                url.searchParams.set('auth_time', parsed.auth_time);
+                if(parsed.page) url.searchParams.set('p', parsed.page);
+                if(parsed.selected_no) url.searchParams.set('s_no', parsed.selected_no);
+                if(parsed.selected_year) url.searchParams.set('s_year', parsed.selected_year);
+                if(parsed.media_no) url.searchParams.set('m_no', parsed.media_no);
+                if(parsed.edit_no) url.searchParams.set('e_no', parsed.edit_no);
+                window.location.href = url.href;
+            }
         }
     }
     </script>
     """
     components.html(js_load, height=0)
 
+# 初期化ロジック
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
     load_auth_from_storage()
     
+    # URLパラメータからSessionStateを復元
     params = st.query_params
     if params.get("ksc_auth") == "true" and params.get("auth_time"):
         try:
@@ -293,7 +300,8 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
             row = target_rows.iloc[0]
             default_vals.update({"カテゴリー":row["カテゴリー"], "日時":row["日時"], "競技分類":row["競技分類"], "対戦相手":row["対戦相手"], "対戦場所":row["対戦場所"], "試合分類":row["試合分類"], "備考":row["備考"]})
     
-    if st.button("← 戻る"): st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
+    if st.button("← 戻る"): 
+        st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     
     with st.form("edit_form"):
         c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"], index=["U8", "U9", "U10", "U11", "U12"].index(default_vals["カテゴリー"]))
@@ -422,7 +430,8 @@ else:
                 st.session_state.action_no = None
                 st.rerun()
     
-    if st.button("➕ 新規試合登録", use_container_width=True): st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
+    if st.button("➕ 新規試合登録", use_container_width=True): 
+        st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
     
     c1, c2 = st.columns([2, 1])
     with c1: sq = st.text_input("🔍 検索")
