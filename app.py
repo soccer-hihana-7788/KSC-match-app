@@ -38,22 +38,24 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ブラウザストレージによる状態保持と自動復旧 (徹底強化) ---
+# --- 2. ブラウザストレージによる状態保持と自動復旧 ---
 def sync_state_to_storage():
-    state_data = {
-        "auth": st.session_state.get("authenticated", False),
-        "auth_time": str(st.session_state.get("auth_time", "")),
-        "page": st.session_state.get("page", "list"),
-        "selected_no": st.session_state.get("selected_no"),
-        "media_no": st.session_state.get("media_no"),
-        "edit_no": st.session_state.get("edit_no"),
-        "selected_year": st.session_state.get("selected_year")
-    }
-    js_code = f"localStorage.setItem('ksc_state', '{json.dumps(state_data)}');"
-    components.html(f"<script>{js_code}</script>", height=0)
+    # 認証されている場合のみストレージに保存する（ログイン失敗時などの上書き防止）
+    if st.session_state.get("authenticated"):
+        state_data = {
+            "auth": True,
+            "auth_time": str(st.session_state.get("auth_time", "")),
+            "page": st.session_state.get("page", "list"),
+            "selected_no": st.session_state.get("selected_no"),
+            "media_no": st.session_state.get("media_no"),
+            "edit_no": st.session_state.get("edit_no"),
+            "selected_year": st.session_state.get("selected_year")
+        }
+        js_code = f"localStorage.setItem('ksc_state', '{json.dumps(state_data)}');"
+        components.html(f"<script>{js_code}</script>", height=0)
 
 def load_auth_from_storage():
-    # ページ読み込み時に即座にlocalStorageを確認し、状態があればURLに注入して強制リロードするJS
+    # ページ読み込み時にlocalStorageを確認し、有効なセッションがあればURLパラメータにセットしてリロード
     js_load = """
     <script>
     const data = localStorage.getItem('ksc_state');
@@ -64,10 +66,8 @@ def load_auth_from_storage():
         const now = new Date();
         const diffHours = (now - authTime) / (1000 * 60 * 60);
 
-        // 6時間以内の有効なセッションがある場合
         if (parsed.auth && diffHours < 6) {
-            // 現在のURLにパラメータがない、もしくは古い場合にのみ更新してリロード
-            if (!url.searchParams.get('ksc_auth') || url.searchParams.get('auth_time') !== parsed.auth_time) {
+            if (!url.searchParams.get('ksc_auth')) {
                 url.searchParams.set('ksc_auth', 'true');
                 url.searchParams.set('auth_time', parsed.auth_time);
                 if(parsed.page) url.searchParams.set('p', parsed.page);
@@ -86,9 +86,7 @@ def load_auth_from_storage():
 # 初期化ロジック
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
-    load_auth_from_storage()
-    
-    # URLパラメータからSessionStateを復元
+    # まずURLパラメータを確認
     params = st.query_params
     if params.get("ksc_auth") == "true" and params.get("auth_time"):
         try:
@@ -103,6 +101,10 @@ if "initialized" not in st.session_state:
                 if params.get("e_no"): st.session_state.edit_no = int(params.get("e_no"))
         except:
             pass
+    
+    # URLパラメータに認証情報がない場合のみ、ストレージからの復旧を試みる
+    if not st.session_state.get("authenticated", False):
+        load_auth_from_storage()
 
 # --- 3. スプレッドシート設定 ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8jh1IeSnu4Afn7a4en7yvLc/edit#gid=0"
@@ -213,7 +215,8 @@ if st.session_state.get("auth_time"):
     if datetime.now() - st.session_state.auth_time > timedelta(hours=AUTH_TIMEOUT_HOURS):
         st.session_state.authenticated = False
         st.query_params.clear()
-        sync_state_to_storage()
+        # タイムアウト時はストレージもクリア（任意）
+        components.html("<script>localStorage.removeItem('ksc_state');</script>", height=0)
 
 if 'df_list' not in st.session_state: st.session_state.df_list = pd.DataFrame()
 if 'page' not in st.session_state: st.session_state.page = "list"
@@ -235,6 +238,8 @@ if not st.session_state.authenticated:
             st.query_params["auth_time"] = now.isoformat()
             sync_state_to_storage()
             st.rerun()
+        else:
+            st.error("IDまたはパスワードが正しくありません。")
     st.stop()
 
 # 年度選択画面
