@@ -627,6 +627,10 @@ else:
     if not df.empty:
         if cf != "すべて": df = df[df["カテゴリー"] == cf]
         if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
+        
+        # 登録日付（日時）の新しい行が一番上にくるようにソート（同日の場合はNoの降順）
+        if '日時' in df.columns:
+            df = df.sort_values(by=['日時', 'No'], ascending=[False, False])
     
     with st.container(border=True):
         if not df.empty:
