@@ -58,25 +58,44 @@ def load_auth_from_storage():
     # ページ読み込み時にlocalStorageを確認し、有効なセッションがあればURLパラメータにセットしてリロード
     js_load = """
     <script>
-    const data = localStorage.getItem('ksc_state');
-    if (data) {
-        const parsed = JSON.parse(data);
-        const url = new URL(window.location.href);
-        const authTime = new Date(parsed.auth_time);
-        const now = new Date();
-        const diffHours = (now - authTime) / (1000 * 60 * 60);
+    try {
+        const data = localStorage.getItem('ksc_state');
+        if (data) {
+            const parsed = JSON.parse(data);
+            const url = new URL(window.location.href);
+            const authTime = new Date(parsed.auth_time);
+            const now = new Date();
+            const diffHours = (now - authTime) / (1000 * 60 * 60);
 
-        if (parsed.auth && diffHours < 6) {
-            if (!url.searchParams.get('ksc_auth')) {
-                url.searchParams.set('ksc_auth', 'true');
-                url.searchParams.set('auth_time', parsed.auth_time);
-                if(parsed.page) url.searchParams.set('p', parsed.page);
-                if(parsed.selected_no) url.searchParams.set('s_no', parsed.selected_no);
-                if(parsed.selected_year) url.searchParams.set('s_year', parsed.selected_year);
-                if(parsed.media_no) url.searchParams.set('m_no', parsed.media_no);
-                if(parsed.edit_no) url.searchParams.set('e_no', parsed.edit_no);
-                window.location.href = url.href;
+            if (parsed.auth && diffHours < 6) {
+                if (!url.searchParams.get('ksc_auth')) {
+                    url.searchParams.set('ksc_auth', 'true');
+                    url.searchParams.set('auth_time', parsed.auth_time);
+                    
+                    // 基本は前回操作画面に戻るが、値がない・壊れている場合は一覧画面(list)をデフォルトにする
+                    const page = parsed.page || 'list';
+                    const year = parsed.selected_year || '2025';
+                    
+                    url.searchParams.set('p', page);
+                    url.searchParams.set('s_year', year);
+                    
+                    if(parsed.selected_no) url.searchParams.set('s_no', parsed.selected_no);
+                    if(parsed.media_no) url.searchParams.set('m_no', parsed.media_no);
+                    if(parsed.edit_no) url.searchParams.set('e_no', parsed.edit_no);
+                    
+                    window.location.href = url.href;
+                }
             }
+        }
+    } catch (e) {
+        // 上く前回画面に戻れない場合は、安全に試合管理一覧画面に戻るパラメータをセットしてリロード
+        const url = new URL(window.location.href);
+        if (!url.searchParams.get('ksc_auth')) {
+            url.searchParams.set('ksc_auth', 'true');
+            url.searchParams.set('auth_time', new Date().toISOString());
+            url.searchParams.set('p', 'list');
+            url.searchParams.set('s_year', '2025');
+            window.location.href = url.href;
         }
     }
     </script>
@@ -92,15 +111,36 @@ if "initialized" not in st.session_state:
         try:
             stored_time = datetime.fromisoformat(params.get("auth_time"))
             if datetime.now() - stored_time < timedelta(hours=6):
+                # セッションが有効ならログイン状態を確定（ログイン画面への逆戻りを防ぐ）
                 st.session_state.authenticated = True
                 st.session_state.auth_time = stored_time
-                if params.get("p"): st.session_state.page = params.get("p")
-                if params.get("s_no"): st.session_state.selected_no = int(params.get("s_no"))
-                if params.get("s_year"): st.session_state.selected_year = params.get("s_year")
-                if params.get("m_no"): st.session_state.media_no = int(params.get("m_no"))
-                if params.get("e_no"): st.session_state.edit_no = int(params.get("e_no"))
-        except:
-            pass
+                
+                # デフォルトは試合管理一覧画面を設定（フォールバック用）
+                st.session_state.page = "list"
+                st.session_state.selected_year = "2025"
+                st.session_state.selected_no = None
+                st.session_state.media_no = None
+                st.session_state.edit_no = None
+                
+                # パラメータからの完全復旧を試みる
+                try:
+                    if params.get("p"): st.session_state.page = params.get("p")
+                    if params.get("s_year"): st.session_state.selected_year = params.get("s_year")
+                    if params.get("s_no"): st.session_state.selected_no = int(params.get("s_no"))
+                    if params.get("m_no"): st.session_state.media_no = int(params.get("m_no"))
+                    if params.get("e_no"): st.session_state.edit_no = int(params.get("e_no"))
+                except Exception:
+                    # 個別パラメータの復元に失敗した場合は、安全に一覧画面に戻す
+                    st.session_state.page = "list"
+                    st.session_state.selected_no = None
+                    st.session_state.media_no = None
+                    st.session_state.edit_no = None
+        except Exception:
+            # 致命的なパースエラー時もログイン画面ではなく一覧画面へフォールバック
+            st.session_state.authenticated = True
+            st.session_state.auth_time = datetime.now()
+            st.session_state.page = "list"
+            st.session_state.selected_year = "2025"
     
     # URLパラメータに認証情報がない場合のみ、ストレージからの復旧を試みる
     if not st.session_state.get("authenticated", False):
