@@ -14,12 +14,12 @@ import time
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
-# モダンなダッシュボード用カスタムCSS
+# オレンジ基調の明るいダッシュボード用カスタムCSS
 st.markdown("""
     <style>
-    /* 全体の背景色を薄いグレーにして、コンテンツを浮き上がらせる */
+    /* 全体の背景色を少し明るく温かみのあるオレンジ系（アイボリー）にする */
     .stApp {
-        background-color: #F3F4F6;
+        background-color: #FFF7ED;
         font-family: 'Helvetica Neue', Arial, sans-serif;
     }
     
@@ -35,7 +35,7 @@ st.markdown("""
         background-color: #FFFFFF;
         border-radius: 12px;
         box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
-        border: 1px solid #E5E7EB;
+        border: 1px solid #FED7AA; /* 枠線も少しオレンジ系に */
         padding: 10px;
     }
 
@@ -44,26 +44,28 @@ st.markdown("""
         border-radius: 8px !important;
         font-weight: 600 !important;
         transition: all 0.2s ease-in-out !important;
-        border: 1px solid #D1D5DB !important;
+        border: 1px solid #FDBA74 !important; /* ボタン枠線オレンジ系 */
+        color: #431407 !important; /* 文字色濃いブラウン */
     }
     
     div.stButton > button:hover {
-        background-color: #F9FAFB !important;
-        border-color: #9CA3AF !important;
+        background-color: #FFEDD5 !important;
+        border-color: #F97316 !important;
     }
 
     /* Primary属性を持つ主要アクションボタンのスタイル */
     div.stButton > button[kind="primary"] {
-        background-color: #3B82F6 !important;
+        background-color: #F97316 !important; /* メインカラーをオレンジに */
         color: white !important;
         border: none !important;
-        box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.2) !important;
+        box-shadow: 0 4px 6px -1px rgba(249, 115, 22, 0.2) !important;
     }
     
     div.stButton > button[kind="primary"]:hover {
-        background-color: #2563EB !important;
+        background-color: #EA580C !important;
         transform: translateY(-2px);
-        box-shadow: 0 6px 8px -1px rgba(59, 130, 246, 0.3) !important;
+        box-shadow: 0 6px 8px -1px rgba(234, 88, 12, 0.3) !important;
+        color: white !important;
     }
 
     /* ダイアログ（ポップアップ）内のボタンスタイル */
@@ -111,11 +113,12 @@ def load_auth_from_storage():
                     url.searchParams.set('p', page);
                     url.searchParams.set('s_year', year);
                     
-                    if(parsed.selected_no) url.searchParams.set('s_no', parsed.selected_no);
-                    if(parsed.media_no) url.searchParams.set('m_no', parsed.media_no);
-                    if(parsed.edit_no) url.searchParams.set('e_no', parsed.edit_no);
+                    // null文字列によるエラーを防ぐため、値がある場合のみセット
+                    if(parsed.selected_no !== null && parsed.selected_no !== undefined) url.searchParams.set('s_no', parsed.selected_no);
+                    if(parsed.media_no !== null && parsed.media_no !== undefined) url.searchParams.set('m_no', parsed.media_no);
+                    if(parsed.edit_no !== null && parsed.edit_no !== undefined) url.searchParams.set('e_no', parsed.edit_no);
                     
-                    window.location.href = url.href;
+                    window.location.replace(url.href);
                 }
             }
         }
@@ -126,13 +129,14 @@ def load_auth_from_storage():
             url.searchParams.set('auth_time', new Date().toISOString());
             url.searchParams.set('p', 'list');
             url.searchParams.set('s_year', '2025');
-            window.location.href = url.href;
+            window.location.replace(url.href);
         }
     }
     </script>
     """
     components.html(js_load, height=0)
 
+# スマホ復帰時の状態復元（エラー時は確実に一覧画面へフォールバック）
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
     params = st.query_params
@@ -143,29 +147,47 @@ if "initialized" not in st.session_state:
                 st.session_state.authenticated = True
                 st.session_state.auth_time = stored_time
                 
+                # デフォルトを一覧画面として安全に初期化
                 st.session_state.page = "list"
                 st.session_state.selected_year = "2025"
                 st.session_state.selected_no = None
                 st.session_state.media_no = None
                 st.session_state.edit_no = None
                 
+                def safe_int(val):
+                    # null文字列等が混入した場合のエラーを防止
+                    if val and str(val).lower() not in ["null", "none", "undefined", ""]:
+                        return int(float(val))
+                    return None
+
                 try:
                     if params.get("p"): st.session_state.page = params.get("p")
                     if params.get("s_year"): st.session_state.selected_year = params.get("s_year")
-                    if params.get("s_no"): st.session_state.selected_no = int(params.get("s_no"))
-                    if params.get("m_no"): st.session_state.media_no = int(params.get("m_no"))
-                    if params.get("e_no"): st.session_state.edit_no = int(params.get("e_no"))
+                    
+                    s_no = safe_int(params.get("s_no"))
+                    if s_no is not None: st.session_state.selected_no = s_no
+                        
+                    m_no = safe_int(params.get("m_no"))
+                    if m_no is not None: st.session_state.media_no = m_no
+                        
+                    e_no = safe_int(params.get("e_no"))
+                    if e_no is not None: st.session_state.edit_no = e_no
                 except Exception:
+                    # 個別復元エラー時は強制的に一覧へ戻す
                     st.session_state.page = "list"
                     st.session_state.selected_no = None
                     st.session_state.media_no = None
                     st.session_state.edit_no = None
         except Exception:
+            # 認証時間のパース等で致命的エラーになった場合も、一覧へ戻して操作可能にする
             st.session_state.authenticated = True
             st.session_state.auth_time = datetime.now()
             st.session_state.page = "list"
             st.session_state.selected_year = "2025"
-    
+            st.session_state.selected_no = None
+            st.session_state.media_no = None
+            st.session_state.edit_no = None
+            
     if not st.session_state.get("authenticated", False):
         load_auth_from_storage()
 
@@ -292,7 +314,7 @@ if not st.session_state.authenticated:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.container(border=True):
-            st.markdown("<h2 style='text-align: center; color: #1F2937;'>⚽ KSC ログイン</h2>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align: center; color: #431407;'>⚽ KSC ログイン</h2>", unsafe_allow_html=True)
             st.write("")
             u = st.text_input("👤 ユーザーID")
             p = st.text_input("🔑 パスワード", type="password")
@@ -383,7 +405,7 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
 
     default_vals = {"カテゴリー":"U12", "日時":date.today(), "競技分類":"サッカー", "対戦相手":"", "対戦場所":"", "試合分類":"", "備考":""}
     
-    if st.session_state.df_list.empty:
+    if st.session_state.df_list is None or st.session_state.df_list.empty:
         st.session_state.df_list = load_data()
         
     if is_edit:
@@ -526,7 +548,7 @@ else:
     # 初心者向けガイド
     st.info("💡 **初めての方へ:** 右側の「➕ 新規登録」から新しい試合を追加できます。一覧の左端「選択」にチェックを入れると、修正・コピー・削除メニューが表示されます。")
 
-    # --- アクション用ポップアップダイアログの定義 (ロジックは一切変更なし) ---
+    # --- アクション用ポップアップダイアログの定義 ---
     @st.dialog("⚙️ 選択した試合に対する操作")
     def show_action_dialog():
         st.write("実行する操作を選択してください。")
@@ -598,16 +620,21 @@ else:
                 st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
 
     # データ一覧パネル
-    if st.session_state.df_list.empty:
+    if st.session_state.df_list is None or st.session_state.df_list.empty:
         st.session_state.df_list = load_data()
         
     df = st.session_state.df_list.copy()
-    if cf != "すべて": df = df[df["カテゴリー"] == cf]
-    if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
+    if not df.empty:
+        if cf != "すべて": df = df[df["カテゴリー"] == cf]
+        if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
     
     with st.container(border=True):
         if not df.empty:
             disp = ['選択', '試合詳細', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+            
+            # スマホ復帰時などのキャッシュ不整合(無限ループフリーズ)を防ぐため、エディタ用キーをユニーク化
+            editor_key = f"main_editor_{st.session_state.get('editor_key_counter', 0)}"
+            
             edf = st.data_editor(df[['No'] + disp].reset_index(drop=True), hide_index=True, 
                 column_config={
                     "No": None,
@@ -616,13 +643,26 @@ else:
                     "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), 
                     "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
                 }, 
-                use_container_width=True, key="main_editor", height=500)
+                use_container_width=True, key=editor_key, height=500)
             
+            needs_rerun = False
             for i in range(len(edf)):
                 row = edf.iloc[i]
-                if row.get("選択"): st.session_state.action_no = int(row["No"]); sync_state_to_storage(); st.rerun()
-                if row.get("試合詳細"): st.session_state.selected_no = int(row["No"]); sync_state_to_storage(); st.rerun()
-                if row.get("写真管理"): st.session_state.media_no = int(row["No"]); sync_state_to_storage(); st.rerun()
+                if row.get("選択"): 
+                    st.session_state.action_no = int(row["No"])
+                    needs_rerun = True
+                if row.get("試合詳細"): 
+                    st.session_state.selected_no = int(row["No"])
+                    needs_rerun = True
+                if row.get("写真管理"): 
+                    st.session_state.media_no = int(row["No"])
+                    needs_rerun = True
+            
+            if needs_rerun:
+                # 状態が変わったらカウンターを増やして次回は完全に新しいエディタとして描画する
+                st.session_state.editor_key_counter = st.session_state.get("editor_key_counter", 0) + 1
+                sync_state_to_storage()
+                st.rerun()
         else:
             st.warning("該当する試合データが見つかりません。")
 
