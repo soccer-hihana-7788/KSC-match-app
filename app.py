@@ -429,18 +429,11 @@ elif st.session_state.selected_no is not None:
 
 else:
     st.title(f"⚽ KSC試合管理一覧 ({st.session_state.selected_year}年度)")
-    
-    col_nav1, col_nav2 = st.columns([1, 5])
-    with col_nav1:
-        if st.button("📅 年度を変更"):
-            st.session_state.selected_year = None
-            st.session_state.df_list = pd.DataFrame()
-            sync_state_to_storage()
-            st.rerun()
 
-    # チェックボックス「選択」クリック時のアクションパネル
-    if st.session_state.action_no:
-        st.warning("選択した試合に対する操作を選択してください")
+    # --- アクション用ポップアップダイアログの定義 ---
+    @st.dialog("⚙️ 選択した試合に対する操作")
+    def show_action_dialog():
+        st.warning("実行する操作を選択してください。")
         ca1, ca2, ca3, ca4 = st.columns(4)
         with ca1:
             if st.button("修正", use_container_width=True): 
@@ -454,7 +447,6 @@ else:
                     target_rows = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.action_no]
                     if not target_rows.empty:
                         row = target_rows.iloc[0]
-                        # 選択した列の既存情報を辞書化して引き継ぐ
                         copy_data = {
                             "カテゴリー": row.get("カテゴリー", ""),
                             "日時": row.get("日時", date.today()),
@@ -464,7 +456,6 @@ else:
                             "試合分類": row.get("試合分類", ""),
                             "備考": row.get("備考", "")
                         }
-                        # target_no=Noneにすることで自動新規採番の上、末尾（一番下の列）へ追加
                         res_no = update_or_add_row(copy_data, target_no=None)
                         if res_no:
                             st.session_state.df_list = load_data()
@@ -486,11 +477,25 @@ else:
                     st.success("削除が完了しました。")
                 st.session_state.action_no = None
                 st.session_state.df_list = load_data()
+                time.sleep(1)
                 st.rerun()
         with ca4:
             if st.button("キャンセル", use_container_width=True): 
                 st.session_state.action_no = None
                 st.rerun()
+    # -----------------------------------------------
+
+    col_nav1, col_nav2 = st.columns([1, 5])
+    with col_nav1:
+        if st.button("📅 年度を変更"):
+            st.session_state.selected_year = None
+            st.session_state.df_list = pd.DataFrame()
+            sync_state_to_storage()
+            st.rerun()
+
+    # チェックボックスが選択されている場合はポップアップダイアログを呼び出す
+    if st.session_state.action_no:
+        show_action_dialog()
     
     if st.button("➕ 新規試合登録", use_container_width=True): 
         st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
