@@ -40,7 +40,6 @@ st.markdown("""
 
 # --- 2. ブラウザストレージによる状態保持と自動復旧 ---
 def sync_state_to_storage():
-    # 認証されている場合のみストレージに保存する（ログイン失敗時などの上書き防止）
     if st.session_state.get("authenticated"):
         state_data = {
             "auth": True,
@@ -55,7 +54,6 @@ def sync_state_to_storage():
         components.html(f"<script>{js_code}</script>", height=0)
 
 def load_auth_from_storage():
-    # ページ読み込み時にlocalStorageを確認し、有効なセッションがあればURLパラメータにセットしてリロード
     js_load = """
     <script>
     try {
@@ -72,7 +70,6 @@ def load_auth_from_storage():
                     url.searchParams.set('ksc_auth', 'true');
                     url.searchParams.set('auth_time', parsed.auth_time);
                     
-                    // 基本は前回操作画面に戻るが、値がない・壊れている場合は一覧画面(list)をデフォルトにする
                     const page = parsed.page || 'list';
                     const year = parsed.selected_year || '2025';
                     
@@ -88,7 +85,6 @@ def load_auth_from_storage():
             }
         }
     } catch (e) {
-        // 上く前回画面に戻れない場合は、安全に試合管理一覧画面に戻るパラメータをセットしてリロード
         const url = new URL(window.location.href);
         if (!url.searchParams.get('ksc_auth')) {
             url.searchParams.set('ksc_auth', 'true');
@@ -102,27 +98,22 @@ def load_auth_from_storage():
     """
     components.html(js_load, height=0)
 
-# 初期化ロジック
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
-    # まずURLパラメータを確認
     params = st.query_params
     if params.get("ksc_auth") == "true" and params.get("auth_time"):
         try:
             stored_time = datetime.fromisoformat(params.get("auth_time"))
             if datetime.now() - stored_time < timedelta(hours=6):
-                # セッションが有効ならログイン状態を確定（ログイン画面への逆戻りを防ぐ）
                 st.session_state.authenticated = True
                 st.session_state.auth_time = stored_time
                 
-                # デフォルトは試合管理一覧画面を設定（フォールバック用）
                 st.session_state.page = "list"
                 st.session_state.selected_year = "2025"
                 st.session_state.selected_no = None
                 st.session_state.media_no = None
                 st.session_state.edit_no = None
                 
-                # パラメータからの完全復旧を試みる
                 try:
                     if params.get("p"): st.session_state.page = params.get("p")
                     if params.get("s_year"): st.session_state.selected_year = params.get("s_year")
@@ -130,19 +121,16 @@ if "initialized" not in st.session_state:
                     if params.get("m_no"): st.session_state.media_no = int(params.get("m_no"))
                     if params.get("e_no"): st.session_state.edit_no = int(params.get("e_no"))
                 except Exception:
-                    # 個別パラメータの復元に失敗した場合は、安全に一覧画面に戻す
                     st.session_state.page = "list"
                     st.session_state.selected_no = None
                     st.session_state.media_no = None
                     st.session_state.edit_no = None
         except Exception:
-            # 致命的なパースエラー時もログイン画面ではなく一覧画面へフォールバック
             st.session_state.authenticated = True
             st.session_state.auth_time = datetime.now()
             st.session_state.page = "list"
             st.session_state.selected_year = "2025"
     
-    # URLパラメータに認証情報がない場合のみ、ストレージからの復旧を試みる
     if not st.session_state.get("authenticated", False):
         load_auth_from_storage()
 
@@ -255,7 +243,6 @@ if st.session_state.get("auth_time"):
     if datetime.now() - st.session_state.auth_time > timedelta(hours=AUTH_TIMEOUT_HOURS):
         st.session_state.authenticated = False
         st.query_params.clear()
-        # タイムアウト時はストレージもクリア
         components.html("<script>localStorage.removeItem('ksc_state');</script>", height=0)
 
 if 'df_list' not in st.session_state: st.session_state.df_list = pd.DataFrame()
@@ -340,7 +327,6 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
     is_edit = st.session_state.edit_no is not None; st.title(f"📝 {st.session_state.selected_year}年度 試合情報の" + ("修正" if is_edit else "新規登録"))
     default_vals = {"カテゴリー":"U12", "日時":date.today(), "競技分類":"サッカー", "対戦相手":"", "対戦場所":"", "試合分類":"", "備考":""}
     
-    # データの再読み込み（リロード対策）
     if st.session_state.df_list.empty:
         st.session_state.df_list = load_data()
         
@@ -452,9 +438,10 @@ else:
             sync_state_to_storage()
             st.rerun()
 
+    # チェックボックス「選択」クリック時のアクションパネル
     if st.session_state.action_no:
         st.warning("選択した試合に対する操作を選択してください")
-        ca1, ca2, ca3 = st.columns(3)
+        ca1, ca2, ca3, ca4 = st.columns(4)
         with ca1:
             if st.button("修正", use_container_width=True): 
                 st.session_state.edit_no = st.session_state.action_no
@@ -462,6 +449,31 @@ else:
                 sync_state_to_storage()
                 st.rerun()
         with ca2:
+            if st.button("コピー", use_container_width=True):
+                with st.spinner("コピー作成中..."):
+                    target_rows = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.action_no]
+                    if not target_rows.empty:
+                        row = target_rows.iloc[0]
+                        # 選択した列の既存情報を辞書化して引き継ぐ
+                        copy_data = {
+                            "カテゴリー": row.get("カテゴリー", ""),
+                            "日時": row.get("日時", date.today()),
+                            "競技分類": row.get("競技分類", ""),
+                            "対戦相手": row.get("対戦相手", ""),
+                            "対戦場所": row.get("対戦場所", ""),
+                            "試合分類": row.get("試合分類", ""),
+                            "備考": row.get("備考", "")
+                        }
+                        # target_no=Noneにすることで自動新規採番の上、末尾（一番下の列）へ追加
+                        res_no = update_or_add_row(copy_data, target_no=None)
+                        if res_no:
+                            st.session_state.df_list = load_data()
+                            st.success("選択した試合を一番下へコピーしました。")
+                st.session_state.action_no = None
+                sync_state_to_storage()
+                time.sleep(1)
+                st.rerun()
+        with ca3:
             if st.button("削除", use_container_width=True):
                 client = get_gspread_client()
                 sh = client.open_by_url(SPREADSHEET_URL)
@@ -475,7 +487,7 @@ else:
                 st.session_state.action_no = None
                 st.session_state.df_list = load_data()
                 st.rerun()
-        with ca3:
+        with ca4:
             if st.button("キャンセル", use_container_width=True): 
                 st.session_state.action_no = None
                 st.rerun()
