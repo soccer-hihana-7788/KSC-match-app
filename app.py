@@ -134,7 +134,6 @@ def load_auth_from_storage():
                     url.searchParams.set('p', page);
                     url.searchParams.set('s_year', year);
                     
-                    // null文字列によるエラーを防ぐため、値がある場合のみセット
                     if(parsed.selected_no !== null && parsed.selected_no !== undefined) url.searchParams.set('s_no', parsed.selected_no);
                     if(parsed.media_no !== null && parsed.media_no !== undefined) url.searchParams.set('m_no', parsed.media_no);
                     if(parsed.edit_no !== null && parsed.edit_no !== undefined) url.searchParams.set('e_no', parsed.edit_no);
@@ -168,7 +167,6 @@ if "initialized" not in st.session_state:
                 st.session_state.authenticated = True
                 st.session_state.auth_time = stored_time
                 
-                # デフォルトを一覧画面として安全に初期化
                 st.session_state.page = "list"
                 st.session_state.selected_year = "2025"
                 st.session_state.selected_no = None
@@ -176,7 +174,6 @@ if "initialized" not in st.session_state:
                 st.session_state.edit_no = None
                 
                 def safe_int(val):
-                    # null文字列等が混入した場合のエラーを防止
                     if val and str(val).lower() not in ["null", "none", "undefined", ""]:
                         return int(float(val))
                     return None
@@ -194,13 +191,11 @@ if "initialized" not in st.session_state:
                     e_no = safe_int(params.get("e_no"))
                     if e_no is not None: st.session_state.edit_no = e_no
                 except Exception:
-                    # 個別復元エラー時は強制的に一覧へ戻す
                     st.session_state.page = "list"
                     st.session_state.selected_no = None
                     st.session_state.media_no = None
                     st.session_state.edit_no = None
         except Exception:
-            # 認証時間のパース等で致命的エラーになった場合も、一覧へ戻して操作可能にする
             st.session_state.authenticated = True
             st.session_state.auth_time = datetime.now()
             st.session_state.page = "list"
@@ -553,7 +548,6 @@ elif st.session_state.selected_no is not None:
             c_res = curr.get("result", "")
             h_txt = f"第 {i} 試合" + (f" （{c_res} {curr['score']}）" if c_res else "")
             
-            # 得点者がいる場合はタブのタイトルにも反映して表示する
             scorers_list = curr.get("scorers", [])
             if scorers_list:
                 h_txt += f" ⚽ 得点者: {', '.join(scorers_list)}"
@@ -617,7 +611,7 @@ else:
                         row = target_rows.iloc[0]
                         copy_data = {
                             "カテゴリー": row.get("カテゴリー", ""),
-                            "日時": row.get("日時", date.today()),
+                            "日時": date.today(),  # ← 新規登録同様に本日の日付を設定して最上部に反映させる
                             "競技分類": row.get("競技分類", ""),
                             "対戦相手": row.get("対戦相手", ""),
                             "対戦場所": row.get("対戦場所", ""),
