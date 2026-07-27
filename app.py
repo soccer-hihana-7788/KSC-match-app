@@ -78,17 +78,38 @@ st.markdown("""
 # --- 2. ブラウザストレージによる状態保持と自動復旧 ---
 def sync_state_to_storage():
     if st.session_state.get("authenticated"):
+        page = st.session_state.get("page", "list")
+        year = st.session_state.get("selected_year", "2025")
+        s_no = st.session_state.get("selected_no")
+        m_no = st.session_state.get("media_no")
+        e_no = st.session_state.get("edit_no")
+
         state_data = {
             "auth": True,
             "auth_time": str(st.session_state.get("auth_time", "")),
-            "page": st.session_state.get("page", "list"),
-            "selected_no": st.session_state.get("selected_no"),
-            "media_no": st.session_state.get("media_no"),
-            "edit_no": st.session_state.get("edit_no"),
-            "selected_year": st.session_state.get("selected_year")
+            "page": page,
+            "selected_no": s_no,
+            "media_no": m_no,
+            "edit_no": e_no,
+            "selected_year": year
         }
         js_code = f"localStorage.setItem('ksc_state', '{json.dumps(state_data)}');"
         components.html(f"<script>{js_code}</script>", height=0)
+
+        # URLパラメータも同時に更新し、スマホ再読み込み(画面OFF/ON)からの復帰を確実にする
+        st.query_params["ksc_auth"] = "true"
+        st.query_params["auth_time"] = str(st.session_state.get("auth_time", ""))
+        st.query_params["p"] = page
+        st.query_params["s_year"] = year
+        
+        if s_no is not None: st.query_params["s_no"] = str(s_no)
+        elif "s_no" in st.query_params: del st.query_params["s_no"]
+        
+        if m_no is not None: st.query_params["m_no"] = str(m_no)
+        elif "m_no" in st.query_params: del st.query_params["m_no"]
+        
+        if e_no is not None: st.query_params["e_no"] = str(e_no)
+        elif "e_no" in st.query_params: del st.query_params["e_no"]
 
 def load_auth_from_storage():
     js_load = """
@@ -187,9 +208,6 @@ if "initialized" not in st.session_state:
             st.session_state.selected_no = None
             st.session_state.media_no = None
             st.session_state.edit_no = None
-            
-    if not st.session_state.get("authenticated", False):
-        load_auth_from_storage()
 
 # --- 3. スプレッドシート設定 ---
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1QmQ5uw5HI3tHmYTC29uR8jh1IeSnu4Afn7a4en7yvLc/edit#gid=0"
@@ -256,6 +274,15 @@ def load_data():
         df['試合詳細'] = False
         df['写真管理'] = False
     return df
+
+# アプリ再起動時（リロード時）に最新データを強制取得してバグを防ぐ
+if "initialized" in st.session_state and st.session_state.get("authenticated"):
+    if "data_loaded_on_init" not in st.session_state:
+        st.session_state.df_list = load_data()
+        st.session_state.data_loaded_on_init = True
+
+if not st.session_state.get("authenticated", False):
+    load_auth_from_storage()
 
 def update_or_add_row(data_dict, target_no=None):
     for attempt in range(3):
@@ -395,12 +422,18 @@ if st.session_state.selected_year is None:
 if st.session_state.page == "create" or st.session_state.edit_no is not None:
     is_edit = st.session_state.edit_no is not None
     
-    col_nav, _ = st.columns([1, 5])
+    st.markdown(f"<h2>📝 {st.session_state.selected_year}年度 試合情報の{'修正' if is_edit else '新規登録'}</h2>", unsafe_allow_html=True)
+    
+    st.write("") # ボタン上部にスペース
+    col_nav, _ = st.columns([1.5, 4.5])
     with col_nav:
         if st.button("← ダッシュボードへ戻る", use_container_width=True): 
-            st.session_state.page = "list"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
+            st.session_state.page = "list"
+            st.session_state.edit_no = None
+            st.session_state.df_list = load_data() # 最新データをロード
+            sync_state_to_storage()
+            st.rerun()
 
-    st.markdown(f"<h2>📝 {st.session_state.selected_year}年度 試合情報の{'修正' if is_edit else '新規登録'}</h2>", unsafe_allow_html=True)
     st.info("必要項目を入力し、下部の「保存する」ボタンを押してください。")
 
     default_vals = {"カテゴリー":"U12", "日時":date.today(), "競技分類":"サッカー", "対戦相手":"", "対戦場所":"", "試合分類":"", "備考":""}
@@ -450,11 +483,18 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
 # --- UI: 写真管理ページ ---
 elif st.session_state.media_no is not None:
     no = st.session_state.media_no
-    col_nav, _ = st.columns([1, 5])
-    with col_nav:
-        if st.button("← ダッシュボードへ戻る", use_container_width=True): st.session_state.media_no = None; sync_state_to_storage(); st.rerun()
     
     st.markdown("<h2>🖼️ 写真管理ダッシュボード</h2>", unsafe_allow_html=True)
+    
+    st.write("")
+    col_nav, _ = st.columns([1.5, 4.5])
+    with col_nav:
+        if st.button("← ダッシュボードへ戻る", use_container_width=True): 
+            st.session_state.media_no = None
+            st.session_state.df_list = load_data() # 最新データをロード
+            sync_state_to_storage()
+            st.rerun()
+    
     st.info("試合に関連する写真をアップロードして保管できます。")
     
     with st.container(border=True):
@@ -490,11 +530,17 @@ elif st.session_state.media_no is not None:
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
     
-    col_nav, _ = st.columns([1, 5])
-    with col_nav:
-        if st.button("← ダッシュボードへ戻る", use_container_width=True): st.session_state.selected_no = None; sync_state_to_storage(); st.rerun()
-        
     st.markdown("<h2>📝 試合詳細とスコア登録</h2>", unsafe_allow_html=True)
+    
+    st.write("")
+    col_nav, _ = st.columns([1.5, 4.5])
+    with col_nav:
+        if st.button("← ダッシュボードへ戻る", use_container_width=True): 
+            st.session_state.selected_no = None
+            st.session_state.df_list = load_data() # 最新データをロード
+            sync_state_to_storage()
+            st.rerun()
+        
     st.info("各試合の結果スコアや得点者を記録できます。")
 
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
@@ -507,6 +553,11 @@ elif st.session_state.selected_no is not None:
             rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": " - ", "scorers": [], "result": "", "memo": ""})
             c_res = curr.get("result", "")
             h_txt = f"第 {i} 試合" + (f" （{c_res} {curr['score']}）" if c_res else "")
+            
+            # 得点者がいる場合はタブのタイトルにも反映して表示する
+            scorers_list = curr.get("scorers", [])
+            if scorers_list:
+                h_txt += f" ⚽ 得点者: {', '.join(scorers_list)}"
             
             with st.expander(h_txt, expanded=(i==1)):
                 r_opts = ["勝ち", "負け", "引き分け"]; r_idx = r_opts.index(c_res) if c_res in r_opts else 0
