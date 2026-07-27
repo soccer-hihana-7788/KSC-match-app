@@ -293,27 +293,26 @@ def update_or_add_row(data_dict, target_no=None):
             except: ws = sh.get_worksheet(0)
             
             no_vals = ws.col_values(1)
-            if target_no:
-                cell = ws.find(str(target_no))
-                if not cell: return None
-                target_row = cell.row; new_no = target_no
-            else:
-                last_idx = 0
-                for i, val in enumerate(no_vals):
-                    if val.strip() != "": last_idx = i + 1
-                existing_nos = [int(v) for v in no_vals[1:] if v.strip().isdigit()]
-                new_no = max(existing_nos + [0]) + 1; target_row = last_idx + 1
-
-            if target_row > ws.row_count:
-                ws.add_rows(max(100, target_row - ws.row_count))
+            existing_nos = [int(v) for v in no_vals[1:] if v.strip().isdigit()]
+            new_no = max(existing_nos + [0]) + 1
 
             row = []
             for col in SHEET_COLUMNS:
-                if col == "No": val = new_no
+                if col == "No": val = new_no if not target_no else target_no
                 elif col == "試合場所": val = data_dict.get("対戦場所", "")
                 else: val = data_dict.get(col, "")
                 row.append(str(val.isoformat() if isinstance(val, (date, datetime)) else val))
-            ws.update(f"A{target_row}", [row]); return new_no
+
+            if target_no:
+                cell = ws.find(str(target_no))
+                if not cell: return None
+                target_row = cell.row
+                ws.update(f"A{target_row}", [row])
+                return target_no
+            else:
+                # 新規登録およびコピー時は一覧の最上部（ヘッダー直下の2行目）に挿入する
+                ws.insert_row(row, index=2)
+                return new_no
         except Exception as e:
             if attempt == 2: st.error(f"保存エラー: {e}"); return None
             time.sleep(1)
@@ -628,7 +627,7 @@ else:
                         res_no = update_or_add_row(copy_data, target_no=None)
                         if res_no:
                             st.session_state.df_list = load_data()
-                            st.success("選択した試合を一番下へコピーしました。")
+                            st.success("選択した試合を一番上へコピーしました。")
                 st.session_state.action_no = None
                 sync_state_to_storage()
                 time.sleep(1)
