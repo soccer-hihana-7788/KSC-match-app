@@ -23,6 +23,11 @@ st.markdown("""
         font-family: 'Helvetica Neue', Arial, sans-serif;
     }
     
+    /* サイドバーの背景色調整 */
+    [data-testid="stSidebar"] {
+        background-color: #FFEDD5 !important;
+    }
+
     /* 余白の調整 */
     .block-container {
         padding-top: 2rem;
@@ -35,7 +40,7 @@ st.markdown("""
         background-color: #FFFFFF;
         border-radius: 12px;
         box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
-        border: 1px solid #FED7AA; /* 枠線も少しオレンジ系に */
+        border: 1px solid #FED7AA; 
         padding: 10px;
     }
 
@@ -69,8 +74,8 @@ st.markdown("""
         border-radius: 8px !important;
         font-weight: 600 !important;
         transition: all 0.2s ease-in-out !important;
-        border: 1px solid #FDBA74 !important; /* ボタン枠線オレンジ系 */
-        color: #431407 !important; /* 文字色濃いブラウン */
+        border: 1px solid #FDBA74 !important; 
+        color: #431407 !important; 
     }
     
     div.stButton > button:hover {
@@ -80,7 +85,7 @@ st.markdown("""
 
     /* Primary属性を持つ主要アクションボタンのスタイル */
     div.stButton > button[kind="primary"] {
-        background-color: #F97316 !important; /* メインカラーをオレンジに */
+        background-color: #F97316 !important; 
         color: white !important;
         border: none !important;
         box-shadow: 0 4px 6px -1px rgba(249, 115, 22, 0.2) !important;
@@ -106,7 +111,6 @@ def sync_state_to_storage():
         page = st.session_state.get("page", "list")
         year = st.session_state.get("selected_year", "2025")
         
-        # NumPy型やdatetimeオブジェクト対策として型を明示変換
         def to_py_int(val):
             if val is not None:
                 try:
@@ -128,11 +132,9 @@ def sync_state_to_storage():
             "edit_no": e_no,
             "selected_year": str(year)
         }
-        # default=str を指定して JSON シリアライズエラーを防止
         js_code = f"localStorage.setItem('ksc_state', '{json.dumps(state_data, default=str)}');"
         components.html(f"<script>{js_code}</script>", height=0)
 
-        # URLパラメータも同時に更新
         st.query_params["ksc_auth"] = "true"
         st.query_params["auth_time"] = str(st.session_state.get("auth_time", ""))
         st.query_params["p"] = str(page)
@@ -192,7 +194,6 @@ def load_auth_from_storage():
     """
     components.html(js_load, height=0)
 
-# スマホ復帰時の状態復元（エラー時は確実に一覧画面へフォールバック）
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
     params = st.query_params
@@ -306,7 +307,6 @@ def load_data():
         df['写真管理'] = False
     return df
 
-# アプリ再起動時（リロード時）に最新データを取得
 if "initialized" in st.session_state and st.session_state.get("authenticated"):
     if "data_loaded_on_init" not in st.session_state:
         st.session_state.df_list = load_data()
@@ -341,7 +341,6 @@ def update_or_add_row(data_dict, target_no=None):
                 ws.update(f"A{target_row}", [row])
                 return target_no
             else:
-                # 新規登録およびコピー時は一覧の最上部（ヘッダー直下の2行目）に挿入
                 ws.insert_row(row, index=2)
                 return new_no
         except Exception as e:
@@ -449,23 +448,64 @@ if st.session_state.selected_year is None:
                         st.error(f"削除に失敗しました: {e}")
     st.stop()
 
-# --- 5. 画面遷移 ---
+
+# ==========================================
+# --- 5. 左側サイドバー（共通メニュー）の構築 ---
+# ==========================================
+is_main_dashboard = (st.session_state.page == "list" and st.session_state.media_no is None and st.session_state.selected_no is None)
+
+with st.sidebar:
+    st.markdown("### 📋 メニュー")
+    st.markdown(f"**対象年度: {st.session_state.selected_year}年度**")
+    
+    # メイン一覧画面以外にいる場合は「一覧へ戻る」ボタンを表示
+    if not is_main_dashboard:
+        if st.button("← 一覧へ戻る", use_container_width=True): 
+            st.session_state.page = "list"
+            st.session_state.edit_no = None
+            st.session_state.media_no = None
+            st.session_state.selected_no = None
+            st.session_state.df_list = load_data()
+            sync_state_to_storage()
+            st.rerun()
+            
+    if st.button("📅 年度を変更", use_container_width=True):
+        st.session_state.selected_year = None
+        st.session_state.df_list = pd.DataFrame()
+        sync_state_to_storage()
+        st.rerun()
+
+    st.markdown("---")
+    
+    if st.button("➕ 新規試合登録", type="primary", use_container_width=True): 
+        st.session_state.page = "create"
+        st.session_state.edit_no = None
+        st.session_state.media_no = None
+        st.session_state.selected_no = None
+        st.session_state.new_form_id = int(time.time())
+        sync_state_to_storage()
+        st.rerun()
+
+    # 一覧画面でのみ検索・絞り込みパネルを表示
+    if is_main_dashboard:
+        st.markdown("---")
+        st.markdown("### 🔍 検索・絞り込み")
+        sq = st.text_input("キーワード検索", placeholder="対戦相手・場所など...")
+        cf = st.selectbox("カテゴリー", ["すべて", "U8", "U9", "U10", "U11", "U12"])
+    else:
+        sq = ""
+        cf = "すべて"
+
+
+# ==========================================
+# --- 6. 画面遷移（メイン領域） ---
+# ==========================================
+
 # --- UI: 新規登録・修正ページ ---
 if st.session_state.page == "create" or st.session_state.edit_no is not None:
     is_edit = st.session_state.edit_no is not None
     
-    st.markdown(f"<h2>📝 {st.session_state.selected_year}年度 試合情報の{'修正' if is_edit else '新規登録'}</h2>", unsafe_allow_html=True)
-    
-    st.write("")
-    col_nav, _ = st.columns([1.5, 4.5])
-    with col_nav:
-        if st.button("← ダッシュボードへ戻る", use_container_width=True): 
-            st.session_state.page = "list"
-            st.session_state.edit_no = None
-            st.session_state.df_list = load_data()
-            sync_state_to_storage()
-            st.rerun()
-
+    st.markdown(f"<h2>📝 試合情報の{'修正' if is_edit else '新規登録'}</h2>", unsafe_allow_html=True)
     st.info("必要項目を入力し、下部の「保存する」ボタンを押してください。")
 
     default_vals = {"カテゴリー":"U12", "日時":date.today(), "競技分類":"サッカー", "対戦相手":"", "対戦場所":"", "試合分類":"", "備考":""}
@@ -517,18 +557,7 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
 # --- UI: 写真管理ページ ---
 elif st.session_state.media_no is not None:
     no = st.session_state.media_no
-    
     st.markdown("<h2>🖼️ 写真管理ダッシュボード</h2>", unsafe_allow_html=True)
-    
-    st.write("")
-    col_nav, _ = st.columns([1.5, 4.5])
-    with col_nav:
-        if st.button("← ダッシュボードへ戻る", use_container_width=True): 
-            st.session_state.media_no = None
-            st.session_state.df_list = load_data()
-            sync_state_to_storage()
-            st.rerun()
-    
     st.info("試合に関連する写真をアップロードして保管できます。")
     
     with st.container(border=True):
@@ -563,18 +592,7 @@ elif st.session_state.media_no is not None:
 # --- UI: 試合詳細（スコア結果入力）ページ ---
 elif st.session_state.selected_no is not None:
     no = st.session_state.selected_no
-    
     st.markdown("<h2>📝 試合詳細とスコア登録</h2>", unsafe_allow_html=True)
-    
-    st.write("")
-    col_nav, _ = st.columns([1.5, 4.5])
-    with col_nav:
-        if st.button("← ダッシュボードへ戻る", use_container_width=True): 
-            st.session_state.selected_no = None
-            st.session_state.df_list = load_data()
-            sync_state_to_storage()
-            st.rerun()
-        
     st.info("各試合の結果スコアや得点者を記録できます。")
 
     client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
@@ -623,18 +641,7 @@ elif st.session_state.selected_no is not None:
 
 # --- UI: メインダッシュボード（一覧画面） ---
 else:
-    # ヘッダーと年度切り替え
-    col_title, col_nav = st.columns([4, 1])
-    with col_title:
-        st.markdown(f"<h2>📊 KSC試合管理ダッシュボード <span style='font-size:1.2rem; color:#6B7280;'>({st.session_state.selected_year}年度)</span></h2>", unsafe_allow_html=True)
-    with col_nav:
-        if st.button("📅 年度を変更", use_container_width=True):
-            st.session_state.selected_year = None
-            st.session_state.df_list = pd.DataFrame()
-            sync_state_to_storage()
-            st.rerun()
-
-    # 指導メッセージ
+    st.markdown(f"<h2>📊 KSC試合管理ダッシュボード</h2>", unsafe_allow_html=True)
     st.info("💡 **操作方法:** 「選択」チェックボックスを押すと編集・削除・コピーの操作ダイアログが開きます。「試合詳細」にチェックを入れると該当試合のスコア登録画面へ遷移します。")
 
     # --- アクション用ポップアップダイアログの定義 ---
@@ -656,7 +663,7 @@ else:
                         row = target_rows.iloc[0]
                         copy_data = {
                             "カテゴリー": row.get("カテゴリー", ""),
-                            "日時": date.today(),  # 最上部に並ぶよう本日日付に設定して保存
+                            "日時": date.today(),
                             "競技分類": row.get("競技分類", ""),
                             "対戦相手": row.get("対戦相手", ""),
                             "対戦場所": row.get("対戦場所", ""),
@@ -692,36 +699,21 @@ else:
                 st.session_state.action_no = None
                 st.rerun()
 
-    # チェックボックスが選択されている場合はポップアップダイアログを呼び出し
     if st.session_state.action_no:
         show_action_dialog()
     
-    # コントロールパネル（検索・絞り込み・新規登録）
-    with st.container(border=True):
-        st.markdown("**🔍 検索 & 操作パネル**")
-        c1, c2, c3, c4 = st.columns([2, 1.5, 0.5, 1.5])
-        with c1: 
-            sq = st.text_input("検索", label_visibility="collapsed", placeholder="キーワード検索 (対戦相手・場所など)...")
-        with c2: 
-            cf = st.selectbox("カテゴリー", ["すべて", "U8", "U9", "U10", "U11", "U12"], label_visibility="collapsed")
-        with c4:
-            if st.button("➕ 新規試合登録", type="primary", use_container_width=True): 
-                st.session_state.page = "create"
-                st.session_state.edit_no = None
-                st.session_state.new_form_id = int(time.time())
-                sync_state_to_storage()
-                st.rerun()
-
     # データ一覧パネル
     if st.session_state.df_list is None or st.session_state.df_list.empty:
         st.session_state.df_list = load_data()
         
     df = st.session_state.df_list.copy()
+    
+    # フィルタリング（サイドバーの入力値を利用）
     if not df.empty:
         if cf != "すべて": df = df[df["カテゴリー"] == cf]
         if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
         
-        # 登録日付（日時）の新しい行が一番上にくるようにソート（同日の場合はNoの降順）
+        # 日時の新しい行が一番上にくるようにソート
         if '日時' in df.columns:
             df = df.sort_values(by=['日時', 'No'], ascending=[False, False])
     
@@ -745,19 +737,16 @@ else:
             for idx, row in edf.iterrows():
                 target_no = int(row['No'])
                 
-                # 左側「選択」チェックボックス操作時
                 if row['選択']:
                     st.session_state.action_no = target_no
                     needs_rerun = True
                     break
                 
-                # 左側「試合詳細」チェックボックス操作時
                 if row['試合詳細']:
                     st.session_state.selected_no = target_no
                     needs_rerun = True
                     break
 
-                # 「写真管理」チェックボックス操作時
                 if row['写真管理']:
                     st.session_state.media_no = target_no
                     needs_rerun = True
