@@ -6,7 +6,7 @@ import time
 
 import gspread
 import numpy as np
-import oauth2client.service_account import ServiceAccountCredentials
+from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 from PIL import Image, ImageOps
 import streamlit as st
@@ -236,7 +236,6 @@ def fetch_available_years():
             if yr.isdigit():
                 detected_years.add(yr)
 
-    # デフォルトの基本年度を追加
     default_years = {"2024", "2025", "2026", "2027"}
     all_years = sorted(list(detected_years.union(default_years)))
     return all_years
@@ -274,11 +273,9 @@ def load_data():
             df = pd.DataFrame(valid_rows, columns=header)
 
             if not df.empty:
-                # 列名のゆれ対応 (試合場所 -> 対戦場所)
                 if "試合場所" in df.columns:
                     df = df.rename(columns={"試合場所": "対戦場所"})
 
-                # 不足しているカラムの初期化
                 for col in SHEET_COLUMNS:
                     if col not in df.columns:
                         df[col] = ""
@@ -488,7 +485,6 @@ with st.sidebar:
     # 動的年度管理メニュー
     st.markdown("📅 **管理年度の設定**")
 
-    # 利用可能年度を取得（初回または必要時）
     if "years_loaded" not in st.session_state:
         st.session_state.available_years = fetch_available_years()
         st.session_state.years_loaded = True
