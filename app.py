@@ -39,6 +39,31 @@ st.markdown("""
         padding: 10px;
     }
 
+    /* 端末のダークモード設定等に影響されず、文字色を暗いグレーに固定する（白飛び防止） */
+    .stApp, .stMarkdown, .stText, p, span, label, h1, h2, h3, h4, h5, h6, li {
+        color: #333333 !important;
+    }
+
+    /* 入力フィールドやドロップダウンの背景色と文字色を強制的にライトテーマ化 */
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="textarea"] > div,
+    div[data-testid="stDateInput"] > div {
+        background-color: #FFFFFF !important;
+        color: #333333 !important;
+    }
+    
+    div[data-baseweb="input"] input,
+    div[data-baseweb="textarea"] textarea,
+    div[data-baseweb="select"] div {
+        color: #333333 !important;
+    }
+
+    /* Expanderのタイトルや内容の文字色 */
+    div[data-testid="stExpander"] summary {
+        color: #333333 !important;
+    }
+
     /* 全てのボタンの基本形状をモダンに */
     div.stButton > button {
         border-radius: 8px !important;
@@ -363,7 +388,9 @@ if st.session_state.selected_year is None:
     existing_years = []
     for ws in worksheets:
         if ws.title.startswith("list_"):
-            existing_years.append(ws.title.replace("list_", ""))
+            y_val = ws.title.replace("list_", "")
+            if y_val and y_val != "None": # None年度を除外
+                existing_years.append(y_val)
     
     for y in ["2025", "2026"]:
         if y not in existing_years: existing_years.append(y)
@@ -441,15 +468,18 @@ if st.session_state.page == "create" or st.session_state.edit_no is not None:
             row = target_rows.iloc[0]
             default_vals.update({"カテゴリー":row["カテゴリー"], "日時":row["日時"], "競技分類":row["競技分類"], "対戦相手":row["対戦相手"], "対戦場所":row["対戦場所"], "試合分類":row["試合分類"], "備考":row["備考"]})
     
+    # 状態の残存(キャッシュ)を防ぐため、ウィジェットに一意のサフィックスキーを付与
+    form_suffix = f"edit_{st.session_state.edit_no}" if is_edit else f"new_{st.session_state.get('new_form_id', 0)}"
+    
     with st.container(border=True):
         with st.form("edit_form"):
-            c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"], index=["U8", "U9", "U10", "U11", "U12"].index(default_vals["カテゴリー"]))
-            c_date = st.date_input("日時", value=default_vals["日時"])
-            c_type = st.selectbox("競技分類", ["サッカー", "フットサル"], index=0 if default_vals["競技分類"]=="サッカー" else 1)
-            c_opp = st.text_input("対戦相手", value=default_vals["対戦相手"], placeholder="例: 愛知FC")
-            c_loc = st.text_input("対戦場所", value=default_vals["対戦場所"], placeholder="例: 一宮フットサルパーク")
-            c_class = st.text_input("試合分類", value=default_vals["試合分類"], placeholder="例: TRM, 公式戦など")
-            c_memo = st.text_area("備考", value=default_vals["備考"], placeholder="特記事項があれば入力してください")
+            c_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"], index=["U8", "U9", "U10", "U11", "U12"].index(default_vals["カテゴリー"]), key=f"cat_{form_suffix}")
+            c_date = st.date_input("日時", value=default_vals["日時"], key=f"date_{form_suffix}")
+            c_type = st.selectbox("競技分類", ["サッカー", "フットサル"], index=0 if default_vals["競技分類"]=="サッカー" else 1, key=f"type_{form_suffix}")
+            c_opp = st.text_input("対戦相手", value=default_vals["対戦相手"], placeholder="例: 愛知FC", key=f"opp_{form_suffix}")
+            c_loc = st.text_input("対戦場所", value=default_vals["対戦場所"], placeholder="例: 一宮フットサルパーク", key=f"loc_{form_suffix}")
+            c_class = st.text_input("試合分類", value=default_vals["試合分類"], placeholder="例: TRM, 公式戦など", key=f"class_{form_suffix}")
+            c_memo = st.text_area("備考", value=default_vals["備考"], placeholder="特記事項があれば入力してください", key=f"memo_{form_suffix}")
             
             st.write("")
             submitted = st.form_submit_button("💾 保存する", type="primary")
@@ -544,19 +574,25 @@ elif st.session_state.selected_no is not None:
     
     with st.container(border=True):
         for i in range(1, 11):
-            rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": " - ", "scorers": [], "result": "", "memo": ""})
+            rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": "", "scorers": [], "result": "", "memo": ""})
             c_res = curr.get("result", "")
-            h_txt = f"第 {i} 試合" + (f" （{c_res} {curr['score']}）" if c_res else "")
+            
+            score_txt = curr.get("score", "").strip()
+            h_txt = f"第 {i} 試合" + (f" （{c_res} {score_txt}）" if c_res or score_txt else "")
             
             scorers_list = curr.get("scorers", [])
             if scorers_list:
                 h_txt += f" ⚽ 得点者: {', '.join(scorers_list)}"
             
             with st.expander(h_txt, expanded=(i==1)):
-                r_opts = ["勝ち", "負け", "引き分け"]; r_idx = r_opts.index(c_res) if c_res in r_opts else 0
+                r_opts = ["勝ち", "負け", "引き分け"]
+                # 新規時等、未登録の場合は未選択(None)にする
+                r_idx = r_opts.index(c_res) if c_res in r_opts else None
                 res_val = st.radio("試合結果", r_opts, index=r_idx, key=f"rad_{rk}", horizontal=True)
                 
-                s_p = curr["score"].split("-"); l_v = s_p[0].strip() if len(s_p)>0 else ""; r_v = s_p[1].strip() if len(s_p)>1 else ""
+                s_p = curr["score"].split("-") if "-" in curr["score"] else []
+                l_v = s_p[0].strip() if len(s_p)>0 else ""; r_v = s_p[1].strip() if len(s_p)>1 else ""
+                
                 cl, cr = st.columns(2)
                 with cl: nl = st.text_input("自チーム得点", value=l_v, key=f"l_{rk}")
                 with cr: nr = st.text_input("相手チーム得点", value=r_v, key=f"r_{rk}")
@@ -567,9 +603,9 @@ elif st.session_state.selected_no is not None:
                 if st.button("保存する", key=f"btn_{rk}", type="primary"):
                     with st.spinner("保存中..."):
                         all_results[rk] = {
-                            "score": f"{nl}-{nr}", 
+                            "score": f"{nl}-{nr}" if nl or nr else "", 
                             "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], 
-                            "result": res_val,
+                            "result": res_val if res_val else "",
                             "memo": res_memo
                         }
                         ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
@@ -661,7 +697,11 @@ else:
             cf = st.selectbox("カテゴリー", ["すべて", "U8", "U9", "U10", "U11", "U12"], label_visibility="collapsed")
         with c4:
             if st.button("➕ 新規試合登録", type="primary", use_container_width=True): 
-                st.session_state.page = "create"; st.session_state.edit_no = None; sync_state_to_storage(); st.rerun()
+                st.session_state.page = "create"
+                st.session_state.edit_no = None
+                st.session_state.new_form_id = int(time.time()) # 新規フォーム用に状態を毎回リセット
+                sync_state_to_storage()
+                st.rerun()
 
     # データ一覧パネル
     if st.session_state.df_list is None or st.session_state.df_list.empty:
