@@ -28,34 +28,53 @@ st.markdown("""
         background-color: #FFEDD5 !important;
     }
 
-    /* 左上メニュー（サイドバー）開閉ボタンのスタイル・記号色変更・「メニュー」文字追加 */
+    /* ヘッダー部分の背景透過設定 */
+    header[data-testid="stHeader"] {
+        background-color: transparent !important;
+    }
+
+    /* 左上メニュー（サイドバー）開閉ボタンのスタイル・記号色変更・「メニューを開く」文字追加 */
     [data-testid="stSidebarCollapseButton"],
-    [data-testid="stSidebarCollapsedControl"] {
-        background-color: #FFEDD5 !important;
-        color: #431407 !important;
-        border: 1px solid #F97316 !important;
+    [data-testid="stSidebarCollapsedControl"],
+    header [data-testid="stSidebarCollapsedControl"] {
+        background-color: #F97316 !important;
+        color: #FFFFFF !important;
+        border: 1px solid #EA580C !important;
         border-radius: 8px !important;
-        padding: 4px 10px !important;
+        padding: 6px 12px !important;
         display: inline-flex !important;
         align-items: center !important;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
+        margin-top: 4px !important;
+        margin-left: 4px !important;
+        height: auto !important;
     }
 
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="stSidebarCollapsedControl"] svg,
+    header [data-testid="stSidebarCollapsedControl"] svg,
     button[aria-label*="sidebar"] svg {
-        fill: #431407 !important;
-        color: #431407 !important;
-        stroke: #431407 !important;
+        fill: #FFFFFF !important;
+        color: #FFFFFF !important;
+        stroke: #FFFFFF !important;
+        width: 18px !important;
+        height: 18px !important;
     }
 
     [data-testid="stSidebarCollapsedControl"]::after,
-    [data-testid="stSidebarCollapseButton"]::after {
-        content: " メニュー";
-        font-size: 14px;
-        font-weight: bold;
-        color: #431407 !important;
-        margin-left: 4px;
-        white-space: nowrap;
+    [data-testid="stSidebarCollapseButton"]::after,
+    header [data-testid="stSidebarCollapsedControl"]::after {
+        content: " メニューを開く" !important;
+        font-size: 14px !important;
+        font-weight: bold !important;
+        color: #FFFFFF !important;
+        margin-left: 6px !important;
+        white-space: nowrap !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"]:hover,
+    [data-testid="stSidebarCollapseButton"]:hover {
+        background-color: #EA580C !important;
     }
 
     /* 余白の調整 */
