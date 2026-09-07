@@ -28,6 +28,36 @@ st.markdown("""
         background-color: #FFEDD5 !important;
     }
 
+    /* 左上メニュー（サイドバー）開閉ボタンのスタイル・記号色変更・「メニュー」文字追加 */
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapsedControl"] {
+        background-color: #FFEDD5 !important;
+        color: #431407 !important;
+        border: 1px solid #F97316 !important;
+        border-radius: 8px !important;
+        padding: 4px 10px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+    }
+
+    [data-testid="stSidebarCollapseButton"] svg,
+    [data-testid="stSidebarCollapsedControl"] svg,
+    button[aria-label*="sidebar"] svg {
+        fill: #431407 !important;
+        color: #431407 !important;
+        stroke: #431407 !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"]::after,
+    [data-testid="stSidebarCollapseButton"]::after {
+        content: " メニュー";
+        font-size: 14px;
+        font-weight: bold;
+        color: #431407 !important;
+        margin-left: 4px;
+        white-space: nowrap;
+    }
+
     /* 余白の調整 */
     .block-container {
         padding-top: 2rem;
