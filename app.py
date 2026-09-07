@@ -69,38 +69,55 @@ st.markdown("""
         color: #333333 !important;
     }
 
-    /* 全てのボタンの基本形状をモダンに */
+    /* 全てのボタンの基本形状をモダンに（背景と文字色のコントラストを明確化） */
     div.stButton > button {
         border-radius: 8px !important;
         font-weight: 600 !important;
         transition: all 0.2s ease-in-out !important;
-        border: 1px solid #FDBA74 !important; 
+        border: 1px solid #F97316 !important; 
+        background-color: #FFFFFF !important;
         color: #431407 !important; 
     }
     
     div.stButton > button:hover {
         background-color: #FFEDD5 !important;
-        border-color: #F97316 !important;
+        border-color: #EA580C !important;
+        color: #431407 !important;
     }
 
     /* Primary属性を持つ主要アクションボタンのスタイル */
     div.stButton > button[kind="primary"] {
         background-color: #F97316 !important; 
-        color: white !important;
+        color: #FFFFFF !important;
         border: none !important;
         box-shadow: 0 4px 6px -1px rgba(249, 115, 22, 0.2) !important;
     }
     
     div.stButton > button[kind="primary"]:hover {
         background-color: #EA580C !important;
+        color: #FFFFFF !important;
         transform: translateY(-2px);
         box-shadow: 0 6px 8px -1px rgba(234, 88, 12, 0.3) !important;
-        color: white !important;
     }
 
-    /* ダイアログ（ポップアップ）内のボタンスタイル */
+    /* ダイアログ（ポップアップ）内のスタイル明確化 */
+    div[data-testid="stDialog"] {
+        background-color: #FFFFFF !important;
+        color: #333333 !important;
+    }
+    div[data-testid="stDialog"] p, div[data-testid="stDialog"] h1, div[data-testid="stDialog"] h2, div[data-testid="stDialog"] h3, div[data-testid="stDialog"] div, div[data-testid="stDialog"] span {
+        color: #333333 !important;
+    }
     div[data-testid="stDialog"] div.stButton > button {
         border-radius: 6px !important;
+        background-color: #FFF7ED !important;
+        color: #431407 !important;
+        border: 1px solid #FDBA74 !important;
+    }
+    div[data-testid="stDialog"] div.stButton > button:hover {
+        background-color: #FFEDD5 !important;
+        color: #431407 !important;
+        border-color: #F97316 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -315,6 +332,32 @@ if "initialized" in st.session_state and st.session_state.get("authenticated"):
 if not st.session_state.get("authenticated", False):
     load_auth_from_storage()
 
+def clear_match_results(target_no):
+    """指定されたNoの試合詳細（スコア結果）をクリアするヘルパー関数"""
+    if not target_no:
+        return
+    try:
+        client = get_gspread_client()
+        sh = client.open_by_url(SPREADSHEET_URL)
+        try:
+            ws_res = sh.worksheet("results")
+        except:
+            return
+        res_raw = ws_res.acell("A2").value
+        if not res_raw:
+            return
+        all_results = json.loads(res_raw)
+        changed = False
+        for i in range(1, 11):
+            rk = f"res_{target_no}_{i}"
+            if rk in all_results:
+                del all_results[rk]
+                changed = True
+        if changed:
+            ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
+    except Exception:
+        pass
+
 def update_or_add_row(data_dict, target_no=None):
     for attempt in range(3):
         try:
@@ -342,6 +385,7 @@ def update_or_add_row(data_dict, target_no=None):
                 return target_no
             else:
                 ws.insert_row(row, index=2)
+                clear_match_results(new_no)  # 新規・コピー作成時は過去の試合結果をクリア
                 return new_no
         except Exception as e:
             if attempt == 2: st.error(f"保存エラー: {e}"); return None
@@ -644,7 +688,7 @@ else:
     st.markdown(f"<h2>📊 KSC試合管理ダッシュボード</h2>", unsafe_allow_html=True)
     st.info("💡 **操作方法:** 「選択」チェックボックスを押すと編集・削除・コピーの操作ダイアログが開きます。「試合詳細」にチェックを入れると該当試合のスコア登録画面へ遷移します。")
 
-    # ▼▼ 追加: サマリーダッシュボード ▼▼
+    # サマリーダッシュボード
     if st.session_state.df_list is not None and not st.session_state.df_list.empty:
         summary_df = st.session_state.df_list
         st.markdown("### 📈 登録データサマリー")
@@ -661,7 +705,6 @@ else:
         cc4.metric("U11", f"{len(summary_df[summary_df['カテゴリー'] == 'U11'])} 試合")
         cc5.metric("U12", f"{len(summary_df[summary_df['カテゴリー'] == 'U12'])} 試合")
         st.markdown("---")
-    # ▲▲ 追加ここまで ▲▲
 
     # --- アクション用ポップアップダイアログの定義 ---
     @st.dialog("⚙️ 選択した試合に対する操作")
@@ -707,6 +750,7 @@ else:
                 cell = ws.find(str(st.session_state.action_no))
                 if cell:
                     ws.delete_rows(cell.row)
+                    clear_match_results(st.session_state.action_no)  # 削除時に紐づく試合結果も削除
                     st.success("削除が完了しました。")
                 st.session_state.action_no = None
                 st.session_state.df_list = load_data()
