@@ -545,8 +545,7 @@ if st.session_state.selected_year is None:
 is_main_dashboard = (st.session_state.page == "list" and st.session_state.media_no is None and st.session_state.selected_no is None)
 
 with st.sidebar:
-    # メニュー一覧
-    st.markdown("### 📋 メニュー一覧")
+    st.markdown("### 📋 メニュー")
     st.markdown(f"**対象年度: {st.session_state.selected_year}年度**")
     
     # メイン一覧画面以外にいる場合は「一覧へ戻る」ボタンを表示
@@ -766,95 +765,104 @@ else:
                 st.rerun()
         with ca2:
             if st.button("コピー", use_container_width=True):
-                with st.spinner("コピー中..."):
-                    target_row = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.action_no]
-                    if not target_row.empty:
-                        r_data = target_row.iloc[0].to_dict()
-                        save_data = {
-                            "カテゴリー": r_data.get("カテゴリー", ""),
-                            "日時": r_data.get("日時", date.today()),
-                            "競技分類": r_data.get("競技分類", ""),
-                            "対戦相手": r_data.get("対戦相手", "") + " (コピー)",
-                            "対戦場所": r_data.get("対戦場所", ""),
-                            "試合分類": r_data.get("試合分類", ""),
-                            "備考": r_data.get("備考", "")
+                with st.spinner("コピー作成中..."):
+                    target_rows = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.action_no]
+                    if not target_rows.empty:
+                        row = target_rows.iloc[0]
+                        copy_data = {
+                            "カテゴリー": row.get("カテゴリー", ""),
+                            "日時": date.today(),
+                            "競技分類": row.get("競技分類", ""),
+                            "対戦相手": row.get("対戦相手", ""),
+                            "対戦場所": row.get("対戦場所", ""),
+                            "試合分類": row.get("試合分類", ""),
+                            "備考": row.get("備考", "")
                         }
-                        new_id = update_or_add_row(save_data)
-                        if new_id:
+                        res_no = update_or_add_row(copy_data, target_no=None)
+                        if res_no:
                             st.session_state.df_list = load_data()
-                            st.session_state.action_no = None
-                            sync_state_to_storage()
-                            st.success("試合データをコピーしました。")
-                            time.sleep(1)
-                            st.rerun()
-        with ca3:
-            if st.button("写真管理", use_container_width=True):
-                st.session_state.media_no = st.session_state.action_no
+                            st.success("選択した試合を一番上へコピーしました。")
                 st.session_state.action_no = None
                 sync_state_to_storage()
+                time.sleep(1)
+                st.rerun()
+        with ca3:
+            if st.button("削除", use_container_width=True):
+                client = get_gspread_client()
+                sh = client.open_by_url(SPREADSHEET_URL)
+                ws_name = get_worksheet_name()
+                try: ws = sh.worksheet(ws_name)
+                except: ws = sh.get_worksheet(0)
+                cell = ws.find(str(st.session_state.action_no))
+                if cell:
+                    ws.delete_rows(cell.row)
+                    clear_match_results(st.session_state.action_no)  # 削除時に紐づく試合結果も削除
+                    st.success("削除が完了しました。")
+                st.session_state.action_no = None
+                st.session_state.df_list = load_data()
+                sync_state_to_storage()
+                time.sleep(1)
                 st.rerun()
         with ca4:
-            if st.button("削除", use_container_width=True):
-                with st.spinner("削除中..."):
-                    try:
-                        client = get_gspread_client()
-                        sh = client.open_by_url(SPREADSHEET_URL)
-                        ws_name = get_worksheet_name()
-                        ws = sh.worksheet(ws_name)
-                        cell = ws.find(str(st.session_state.action_no))
-                        if cell:
-                            ws.delete_rows(cell.row)
-                            clear_match_results(st.session_state.action_no)
-                            st.session_state.df_list = load_data()
-                            st.session_state.action_no = None
-                            sync_state_to_storage()
-                            st.success("削除しました。")
-                            time.sleep(1)
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"削除エラー: {e}")
+            if st.button("キャンセル", use_container_width=True): 
+                st.session_state.action_no = None
+                st.rerun()
 
-    df_show = st.session_state.df_list.copy()
-    
-    if sq:
-        df_show = df_show[
-            df_show['対戦相手'].str.contains(sq, na=False) | 
-            df_show['対戦場所'].str.contains(sq, na=False) | 
-            df_show['備考'].str.contains(sq, na=False)
-        ]
-    if cf != "すべて":
-        df_show = df_show[df_show['カテゴリー'] == cf]
-
-    edited_df = st.data_editor(
-        df_show,
-        column_config={
-            "選択": st.column_config.CheckboxColumn("選択", required=True),
-            "試合詳細": st.column_config.CheckboxColumn("試合詳細", required=True),
-            "写真管理": st.column_config.CheckboxColumn("写真管理", required=True),
-            "No": st.column_config.NumberColumn("No", disabled=True),
-        },
-        disabled=["No", "カテゴリー", "日時", "競技分類", "対戦相手", "対戦場所", "試合分類", "備考"],
-        hide_index=True,
-        use_container_width=True,
-        key="match_list_editor"
-    )
-
-    selected_rows = edited_df[edited_df['選択'] == True]
-    if not selected_rows.empty:
-        target_no = int(selected_rows.iloc[0]['No'])
-        st.session_state.action_no = target_no
+    if st.session_state.action_no:
         show_action_dialog()
+    
+    # データ一覧パネル
+    if st.session_state.df_list is None or st.session_state.df_list.empty:
+        st.session_state.df_list = load_data()
+        
+    df = st.session_state.df_list.copy()
+    
+    # フィルタリング（サイドバーの入力値を利用）
+    if not df.empty:
+        if cf != "すべて": df = df[df["カテゴリー"] == cf]
+        if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
+        
+        # 日時の新しい行が一番上にくるようにソート
+        if '日時' in df.columns:
+            df = df.sort_values(by=['日時', 'No'], ascending=[False, False])
+    
+    with st.container(border=True):
+        if not df.empty:
+            disp = ['選択', '試合詳細', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
+            
+            editor_key = f"main_editor_{st.session_state.get('editor_key_counter', 0)}"
+            
+            edf = st.data_editor(df[['No'] + disp].reset_index(drop=True), hide_index=True, 
+                column_config={
+                    "No": None,
+                    "選択": st.column_config.CheckboxColumn("選択", width="small"), 
+                    "試合詳細": st.column_config.CheckboxColumn("試合詳細", width="small"), 
+                    "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), 
+                    "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
+                }, 
+                use_container_width=True, key=editor_key, height=500)
+            
+            needs_rerun = False
+            for idx, row in edf.iterrows():
+                target_no = int(row['No'])
+                
+                if row['選択']:
+                    st.session_state.action_no = target_no
+                    needs_rerun = True
+                    break
+                
+                if row['試合詳細']:
+                    st.session_state.selected_no = target_no
+                    needs_rerun = True
+                    break
 
-    detail_rows = edited_df[edited_df['試合詳細'] == True]
-    if not detail_rows.empty:
-        target_no = int(detail_rows.iloc[0]['No'])
-        st.session_state.selected_no = target_no
-        sync_state_to_storage()
-        st.rerun()
+                if row['写真管理']:
+                    st.session_state.media_no = target_no
+                    needs_rerun = True
+                    break
 
-    media_rows = edited_df[edited_df['写真管理'] == True]
-    if not media_rows.empty:
-        target_no = int(media_rows.iloc[0]['No'])
-        st.session_state.media_no = target_no
-        sync_state_to_storage()
-        st.rerun()
+            if needs_rerun:
+                sync_state_to_storage()
+                st.rerun()
+        else:
+            st.info("表示する試合データがありません。")
