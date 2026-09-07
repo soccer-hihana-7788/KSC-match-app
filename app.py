@@ -33,30 +33,26 @@ st.markdown("""
         background-color: transparent !important;
     }
 
-    /* 左上メニュー（サイドバー）開閉ボタンのスタイル・記号色変更・「メニューを開く」文字追加 */
+    /* 左上メニュー（サイドバー）開閉ボタンに「メニューを開く」文字追加 */
     [data-testid="stSidebarCollapseButton"],
     [data-testid="stSidebarCollapsedControl"],
     header [data-testid="stSidebarCollapsedControl"] {
-        background-color: #F97316 !important;
-        color: #FFFFFF !important;
-        border: 1px solid #EA580C !important;
-        border-radius: 8px !important;
-        padding: 6px 12px !important;
         display: inline-flex !important;
         align-items: center !important;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
-        margin-top: 4px !important;
-        margin-left: 4px !important;
-        height: auto !important;
+        width: auto !important;
+        padding-right: 12px !important;
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
     }
 
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="stSidebarCollapsedControl"] svg,
     header [data-testid="stSidebarCollapsedControl"] svg,
     button[aria-label*="sidebar"] svg {
-        fill: #FFFFFF !important;
-        color: #FFFFFF !important;
-        stroke: #FFFFFF !important;
+        fill: #333333 !important;
+        color: #333333 !important;
+        stroke: #333333 !important;
         width: 18px !important;
         height: 18px !important;
     }
@@ -67,14 +63,15 @@ st.markdown("""
         content: " メニューを開く" !important;
         font-size: 14px !important;
         font-weight: bold !important;
-        color: #FFFFFF !important;
+        color: #333333 !important;
         margin-left: 6px !important;
         white-space: nowrap !important;
     }
 
     [data-testid="stSidebarCollapsedControl"]:hover,
     [data-testid="stSidebarCollapseButton"]:hover {
-        background-color: #EA580C !important;
+        background-color: rgba(0,0,0,0.05) !important;
+        border-radius: 4px !important;
     }
 
     /* 余白の調整 */
