@@ -14,7 +14,7 @@ import time
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
 
-# オレンジ基調の明るいダッシュボード用カスタムCSS
+# オレンジ基調の明るいダッシュボード用カスタムCSS ＆ JSによる確実なボタンテキスト追加
 st.markdown("""
     <style>
     /* 全体の背景色を少し明るく温かみのあるオレンジ系（アイボリー）にする */
@@ -31,47 +31,6 @@ st.markdown("""
     /* ヘッダー部分の背景透過設定 */
     header[data-testid="stHeader"] {
         background-color: transparent !important;
-    }
-
-    /* 左上メニュー（サイドバー）開閉ボタンに「メニューを開く」文字追加 */
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="stSidebarCollapsedControl"],
-    header [data-testid="stSidebarCollapsedControl"] {
-        display: inline-flex !important;
-        align-items: center !important;
-        width: auto !important;
-        padding-right: 12px !important;
-        background-color: transparent !important;
-        border: none !important;
-        box-shadow: none !important;
-    }
-
-    [data-testid="stSidebarCollapseButton"] svg,
-    [data-testid="stSidebarCollapsedControl"] svg,
-    header [data-testid="stSidebarCollapsedControl"] svg,
-    button[aria-label*="sidebar"] svg {
-        fill: #333333 !important;
-        color: #333333 !important;
-        stroke: #333333 !important;
-        width: 18px !important;
-        height: 18px !important;
-    }
-
-    [data-testid="stSidebarCollapsedControl"]::after,
-    [data-testid="stSidebarCollapseButton"]::after,
-    header [data-testid="stSidebarCollapsedControl"]::after {
-        content: " メニューを開く" !important;
-        font-size: 14px !important;
-        font-weight: bold !important;
-        color: #333333 !important;
-        margin-left: 6px !important;
-        white-space: nowrap !important;
-    }
-
-    [data-testid="stSidebarCollapsedControl"]:hover,
-    [data-testid="stSidebarCollapseButton"]:hover {
-        background-color: rgba(0,0,0,0.05) !important;
-        border-radius: 4px !important;
     }
 
     /* 余白の調整 */
@@ -166,6 +125,34 @@ st.markdown("""
         border-color: #F97316 !important;
     }
     </style>
+
+    <script>
+    // サイドバーを開くボタン（≫）の横に「メニューを開く」を確実に追加するスクリプト
+    const observer = new MutationObserver((mutations, obs) => {
+        const doc = window.parent.document;
+        const btn = doc.querySelector('[data-testid="stSidebarCollapsedControl"]') || doc.querySelector('button[aria-label*="sidebar"]');
+        if (btn) {
+            if (!btn.getAttribute('data-menu-label-added')) {
+                btn.style.display = 'inline-flex';
+                btn.style.alignItems = 'center';
+                btn.style.width = 'auto';
+                btn.style.paddingRight = '8px';
+                
+                const span = doc.createElement('span');
+                span.innerText = ' メニューを開く';
+                span.style.fontSize = '14px';
+                span.style.fontWeight = 'bold';
+                span.style.color = '#333333';
+                span.style.marginLeft = '4px';
+                span.style.whiteSpace = 'nowrap';
+                
+                btn.appendChild(span);
+                btn.setAttribute('data-menu-label-added', 'true');
+            }
+        }
+    });
+    observer.observe(window.parent.document.body, { childList: true, subtree: true });
+    </script>
     """, unsafe_allow_html=True)
 
 # --- 2. ブラウザストレージによる状態保持と自動復旧 ---
