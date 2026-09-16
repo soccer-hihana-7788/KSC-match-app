@@ -33,26 +33,28 @@ st.markdown("""
         background-color: transparent !important;
     }
 
-    /* 左上メニュー（サイドバー）開閉ボタンに「メニューを開く」文字追加 */
+    /* 左上メニュー（サイドバー）開閉ボタンに「メニュータブを開く」表示ボタン設置 */
     [data-testid="stSidebarCollapseButton"],
     [data-testid="stSidebarCollapsedControl"],
     header [data-testid="stSidebarCollapsedControl"] {
         display: inline-flex !important;
         align-items: center !important;
         width: auto !important;
-        padding-right: 12px !important;
-        background-color: transparent !important;
-        border: none !important;
-        box-shadow: none !important;
+        padding: 4px 10px !important;
+        background-color: #FFFFFF !important;
+        border: 1px solid #F97316 !important;
+        border-radius: 6px !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+        cursor: pointer !important;
     }
 
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="stSidebarCollapsedControl"] svg,
     header [data-testid="stSidebarCollapsedControl"] svg,
     button[aria-label*="sidebar"] svg {
-        fill: #333333 !important;
-        color: #333333 !important;
-        stroke: #333333 !important;
+        fill: #431407 !important;
+        color: #431407 !important;
+        stroke: #431407 !important;
         width: 18px !important;
         height: 18px !important;
     }
@@ -60,18 +62,17 @@ st.markdown("""
     [data-testid="stSidebarCollapsedControl"]::after,
     [data-testid="stSidebarCollapseButton"]::after,
     header [data-testid="stSidebarCollapsedControl"]::after {
-        content: " メニューを開く" !important;
+        content: " メニュータブを開く" !important;
         font-size: 14px !important;
         font-weight: bold !important;
-        color: #333333 !important;
+        color: #431407 !important;
         margin-left: 6px !important;
         white-space: nowrap !important;
     }
 
     [data-testid="stSidebarCollapsedControl"]:hover,
     [data-testid="stSidebarCollapseButton"]:hover {
-        background-color: rgba(0,0,0,0.05) !important;
-        border-radius: 4px !important;
+        background-color: #FFEDD5 !important;
     }
 
     /* 余白の調整 */
@@ -98,8 +99,7 @@ st.markdown("""
     /* 入力フィールドやドロップダウンの背景色と文字色を強制的にライトテーマ化 */
     div[data-baseweb="input"] > div,
     div[data-baseweb="select"] > div,
-    div[data-baseweb="textarea"] > div,
-    div[data-testid="stDateInput"] > div {
+    div[data-baseweb="textarea"] > div {
         background-color: #FFFFFF !important;
         color: #333333 !important;
     }
@@ -108,6 +108,20 @@ st.markdown("""
     div[data-baseweb="textarea"] textarea,
     div[data-baseweb="select"] div {
         color: #333333 !important;
+    }
+
+    /* 新規登録画面の日時選択の文字色を白色に変更 */
+    div[data-testid="stDateInput"] > div {
+        background-color: #333333 !important;
+        color: #FFFFFF !important;
+    }
+    div[data-testid="stDateInput"] input {
+        color: #FFFFFF !important;
+        background-color: #333333 !important;
+    }
+    div[data-testid="stDateInput"] svg {
+        fill: #FFFFFF !important;
+        color: #FFFFFF !important;
     }
 
     /* Expanderのタイトルや内容の文字色 */
@@ -761,108 +775,96 @@ else:
             if st.button("修正", use_container_width=True): 
                 st.session_state.edit_no = st.session_state.action_no
                 st.session_state.action_no = None
+                if st.session_state.df_list is not None and not st.session_state.df_list.empty:
+                    st.session_state.df_list['選択'] = False
                 sync_state_to_storage()
                 st.rerun()
         with ca2:
             if st.button("コピー", use_container_width=True):
-                with st.spinner("コピー作成中..."):
-                    target_rows = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.action_no]
-                    if not target_rows.empty:
-                        row = target_rows.iloc[0]
-                        copy_data = {
-                            "カテゴリー": row.get("カテゴリー", ""),
-                            "日時": date.today(),
-                            "競技分類": row.get("競技分類", ""),
-                            "対戦相手": row.get("対戦相手", ""),
-                            "対戦場所": row.get("対戦場所", ""),
-                            "試合分類": row.get("試合分類", ""),
-                            "備考": row.get("備考", "")
-                        }
-                        res_no = update_or_add_row(copy_data, target_no=None)
-                        if res_no:
-                            st.session_state.df_list = load_data()
-                            st.success("選択した試合を一番上へコピーしました。")
-                st.session_state.action_no = None
-                sync_state_to_storage()
-                time.sleep(1)
-                st.rerun()
+                target_rows = st.session_state.df_list[st.session_state.df_list["No"] == st.session_state.action_no]
+                if not target_rows.empty:
+                    row = target_rows.iloc[0].to_dict()
+                    update_or_add_row(row, target_no=None)
+                    st.session_state.df_list = load_data()
+                    st.session_state.action_no = None
+                    sync_state_to_storage()
+                    st.success("コピーを作成しました。")
+                    time.sleep(1)
+                    st.rerun()
         with ca3:
             if st.button("削除", use_container_width=True):
                 client = get_gspread_client()
                 sh = client.open_by_url(SPREADSHEET_URL)
-                ws_name = get_worksheet_name()
-                try: ws = sh.worksheet(ws_name)
-                except: ws = sh.get_worksheet(0)
+                ws = sh.worksheet(get_worksheet_name())
                 cell = ws.find(str(st.session_state.action_no))
                 if cell:
                     ws.delete_rows(cell.row)
-                    clear_match_results(st.session_state.action_no)  # 削除時に紐づく試合結果も削除
-                    st.success("削除が完了しました。")
-                st.session_state.action_no = None
-                st.session_state.df_list = load_data()
-                sync_state_to_storage()
-                time.sleep(1)
-                st.rerun()
+                    clear_match_results(st.session_state.action_no)
+                    st.session_state.df_list = load_data()
+                    st.session_state.action_no = None
+                    sync_state_to_storage()
+                    st.success("削除しました。")
+                    time.sleep(1)
+                    st.rerun()
         with ca4:
-            if st.button("キャンセル", use_container_width=True): 
+            if st.button("閉じる", use_container_width=True):
                 st.session_state.action_no = None
-                st.rerun()
-
-    if st.session_state.action_no:
-        show_action_dialog()
-    
-    # データ一覧パネル
-    if st.session_state.df_list is None or st.session_state.df_list.empty:
-        st.session_state.df_list = load_data()
-        
-    df = st.session_state.df_list.copy()
-    
-    # フィルタリング（サイドバーの入力値を利用）
-    if not df.empty:
-        if cf != "すべて": df = df[df["カテゴリー"] == cf]
-        if sq: df = df[df.apply(lambda r: sq.lower() in r.astype(str).str.lower().values, axis=1)]
-        
-        # 日時の新しい行が一番上にくるようにソート
-        if '日時' in df.columns:
-            df = df.sort_values(by=['日時', 'No'], ascending=[False, False])
-    
-    with st.container(border=True):
-        if not df.empty:
-            disp = ['選択', '試合詳細', '対戦相手', '対戦場所', '日時', 'カテゴリー', '試合分類', '競技分類', '写真管理']
-            
-            editor_key = f"main_editor_{st.session_state.get('editor_key_counter', 0)}"
-            
-            edf = st.data_editor(df[['No'] + disp].reset_index(drop=True), hide_index=True, 
-                column_config={
-                    "No": None,
-                    "選択": st.column_config.CheckboxColumn("選択", width="small"), 
-                    "試合詳細": st.column_config.CheckboxColumn("試合詳細", width="small"), 
-                    "写真管理": st.column_config.CheckboxColumn("写真管理", width="small"), 
-                    "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD")
-                }, 
-                use_container_width=True, key=editor_key, height=500)
-            
-            needs_rerun = False
-            for idx, row in edf.iterrows():
-                target_no = int(row['No'])
-                
-                if row['選択']:
-                    st.session_state.action_no = target_no
-                    needs_rerun = True
-                    break
-                
-                if row['試合詳細']:
-                    st.session_state.selected_no = target_no
-                    needs_rerun = True
-                    break
-
-                if row['写真管理']:
-                    st.session_state.media_no = target_no
-                    needs_rerun = True
-                    break
-
-            if needs_rerun:
+                if st.session_state.df_list is not None and not st.session_state.df_list.empty:
+                    st.session_state.df_list['選択'] = False
                 sync_state_to_storage()
                 st.rerun()
-        else:
-            st.info("表示する試合データがありません。")
+
+    # アクション用ダイアログ表示判定
+    if st.session_state.get("action_no") is not None:
+        show_action_dialog()
+
+    # データテーブルの表示処理
+    if st.session_state.df_list is not None and not st.session_state.df_list.empty:
+        df_display = st.session_state.df_list.copy()
+        if cf != "すべて":
+            df_display = df_display[df_display["カテゴリー"] == cf]
+        if sq:
+            df_display = df_display[
+                df_display["対戦相手"].astype(str).str.contains(sq, case=False, na=False) |
+                df_display["対戦場所"].astype(str).str.contains(sq, case=False, na=False) |
+                df_display["備考"].astype(str).str.contains(sq, case=False, na=False)
+            ]
+
+        edited_df = st.data_editor(
+            df_display,
+            column_config={
+                "選択": st.column_config.CheckboxColumn("選択", help="選択して操作ダイアログを開く"),
+                "試合詳細": st.column_config.CheckboxColumn("試合詳細", help="スコア詳細を開く"),
+                "写真管理": st.column_config.CheckboxColumn("写真管理", help="写真管理を開く"),
+                "日時": st.column_config.DateColumn("日時", format="YYYY-MM-DD"),
+            },
+            disabled=[col for col in df_display.columns if col not in ["選択", "試合詳細", "写真管理"]],
+            hide_index=True,
+            use_container_width=True,
+            key=f"data_editor_{st.session_state.get('action_no', 'none')}"
+        )
+
+        # アクション未決定時のみチェックを監視（ループ・チカチカ防止）
+        if st.session_state.get("action_no") is None:
+            selected_rows = edited_df[edited_df["選択"] == True]
+            detail_rows = edited_df[edited_df["試合詳細"] == True]
+            media_rows = edited_df[edited_df["写真管理"] == True]
+
+            if not selected_rows.empty:
+                st.session_state.action_no = int(selected_rows.iloc[0]["No"])
+                sync_state_to_storage()
+                st.rerun()
+
+            elif not detail_rows.empty:
+                st.session_state.selected_no = int(detail_rows.iloc[0]["No"])
+                st.session_state.df_list['試合詳細'] = False
+                sync_state_to_storage()
+                st.rerun()
+
+            elif not media_rows.empty:
+                st.session_state.media_no = int(media_rows.iloc[0]["No"])
+                st.session_state.df_list['写真管理'] = False
+                sync_state_to_storage()
+                st.rerun()
+    else:
+        st.write("該当するデータがありません。")
