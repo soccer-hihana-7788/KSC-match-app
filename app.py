@@ -33,8 +33,7 @@ st.markdown("""
         background-color: transparent !important;
     }
 
-    /* 左上メニュー（サイドバー）開閉ボタンに「メニュータブを開く」文字追加とボタン風装飾 */
-    [data-testid="stSidebarCollapseButton"],
+    /* 左上メニュー（サイドバー）を開くボタンの装飾と「メニューを開く」文字追加 */
     [data-testid="stSidebarCollapsedControl"],
     header [data-testid="stSidebarCollapsedControl"] {
         display: inline-flex !important;
@@ -50,6 +49,41 @@ st.markdown("""
         margin-left: 8px !important;
     }
 
+    [data-testid="stSidebarCollapsedControl"]::after,
+    header [data-testid="stSidebarCollapsedControl"]::after {
+        content: " メニューを開く" !important;
+        font-size: 14px !important;
+        font-weight: bold !important;
+        color: #333333 !important;
+        margin-left: 6px !important;
+        white-space: nowrap !important;
+    }
+
+    /* サイドバー内の閉じるボタンの装飾と「メニューを閉じる」文字追加 */
+    [data-testid="stSidebarCollapseButton"] {
+        display: inline-flex !important;
+        align-items: center !important;
+        width: auto !important;
+        padding-right: 12px !important;
+        padding-left: 8px !important;
+        background-color: #FFFFFF !important;
+        border: 1px solid #F97316 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05) !important;
+        margin-top: 8px !important;
+        margin-left: 8px !important;
+    }
+
+    [data-testid="stSidebarCollapseButton"]::after {
+        content: " メニューを閉じる" !important;
+        font-size: 14px !important;
+        font-weight: bold !important;
+        color: #333333 !important;
+        margin-left: 6px !important;
+        white-space: nowrap !important;
+    }
+
+    /* アイコン共通設定 */
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="stSidebarCollapsedControl"] svg,
     header [data-testid="stSidebarCollapsedControl"] svg,
@@ -59,17 +93,6 @@ st.markdown("""
         stroke: #333333 !important;
         width: 18px !important;
         height: 18px !important;
-    }
-
-    [data-testid="stSidebarCollapsedControl"]::after,
-    [data-testid="stSidebarCollapseButton"]::after,
-    header [data-testid="stSidebarCollapsedControl"]::after {
-        content: " メニュータブを開く" !important;
-        font-size: 14px !important;
-        font-weight: bold !important;
-        color: #333333 !important;
-        margin-left: 6px !important;
-        white-space: nowrap !important;
     }
 
     [data-testid="stSidebarCollapsedControl"]:hover,
@@ -377,7 +400,7 @@ def load_data():
         elif "対戦場所" not in df.columns:
             df["対戦場所"] = ""
         df.insert(0, '選択', False)
-        df['試合詳細'] = False
+        df.insert(1, '試合詳細', False)
         df['写真管理'] = False
     return df
 
