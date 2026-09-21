@@ -457,6 +457,19 @@ def delete_member(name):
         st.error(f"削除エラー: {e}")
     return False
 
+def update_member(old_name, new_name, new_category):
+    try:
+        client = get_gspread_client()
+        sh = client.open_by_url(SPREADSHEET_URL)
+        ws = sh.worksheet("members")
+        cell = ws.find(old_name)
+        if cell:
+            ws.update(f"A{cell.row}", [[new_name, new_category]])
+            return True
+    except Exception as e:
+        st.error(f"修正エラー: {e}")
+    return False
+
 if "initialized" in st.session_state and st.session_state.get("authenticated"):
     if "data_loaded_on_init" not in st.session_state:
         st.session_state.df_list = load_data()
@@ -687,6 +700,7 @@ with st.sidebar:
             st.session_state.edit_no = None
             st.session_state.media_no = None
             st.session_state.selected_no = None
+            st.session_state.pop("detail_data_loaded", None)
             st.session_state.df_list = load_data()
             sync_state_to_storage()
             st.rerun()
@@ -714,6 +728,7 @@ with st.sidebar:
         st.session_state.edit_no = None
         st.session_state.media_no = None
         st.session_state.selected_no = None
+        st.session_state.pop("detail_data_loaded", None)
         sync_state_to_storage()
         st.rerun()
 
@@ -751,6 +766,7 @@ if st.session_state.page == "members":
             if st.button("メンバーを保存", type="primary", use_container_width=True):
                 if m_name.strip():
                     if add_member(m_name.strip(), m_cat):
+                        st.session_state.pop("detail_data_loaded", None)
                         st.success(f"{m_name}（{m_cat}）を登録しました。")
                         time.sleep(1)
                         st.rerun()
@@ -764,10 +780,32 @@ if st.session_state.page == "members":
             if not members_df.empty:
                 st.dataframe(members_df, use_container_width=True, hide_index=True)
                 st.write("")
+                
+                with st.expander("✏️ メンバーの修正"):
+                    edit_target = st.selectbox("修正するメンバーを選択", members_df["名前"].tolist(), key="edit_sel")
+                    if edit_target:
+                        target_row = members_df[members_df["名前"] == edit_target].iloc[0]
+                        new_name = st.text_input("新しい名前", value=target_row["名前"], key="edit_name")
+                        cats = ["U8", "U9", "U10", "U11", "U12"]
+                        current_cat = target_row["カテゴリー"]
+                        idx = cats.index(current_cat) if current_cat in cats else 4
+                        new_cat = st.selectbox("新しいカテゴリー", cats, index=idx, key="edit_cat")
+                        
+                        if st.button("選択したメンバーを修正"):
+                            if new_name.strip():
+                                if update_member(edit_target, new_name.strip(), new_cat):
+                                    st.session_state.pop("detail_data_loaded", None)
+                                    st.success(f"{edit_target} を修正しました。")
+                                    time.sleep(1)
+                                    st.rerun()
+                            else:
+                                st.warning("名前を入力してください。")
+
                 with st.expander("🗑️ メンバーの削除"):
                     del_target = st.selectbox("削除するメンバーを選択", members_df["名前"].tolist())
                     if st.button("選択したメンバーを削除"):
                         if delete_member(del_target):
+                            st.session_state.pop("detail_data_loaded", None)
                             st.success(f"{del_target} を削除しました。")
                             time.sleep(1)
                             st.rerun()
@@ -868,13 +906,21 @@ elif st.session_state.selected_no is not None:
     st.markdown("<h2>📝 試合詳細とスコア登録</h2>", unsafe_allow_html=True)
     st.info("各試合の結果スコアや得点者を記録できます。")
 
-    client = get_gspread_client(); sh = client.open_by_url(SPREADSHEET_URL)
-    try: ws_res = sh.worksheet("results")
-    except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
-    res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
-    
-    # 登録メンバーデータの読み込み
-    m_df = load_members()
+    # API呼び出しをキャッシュ化し、フリーズを防止する
+    if st.session_state.get("detail_data_loaded") != no:
+        client = get_gspread_client()
+        sh = client.open_by_url(SPREADSHEET_URL)
+        try: ws_res = sh.worksheet("results")
+        except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
+        res_raw = ws_res.acell("A2").value
+        st.session_state.all_results = json.loads(res_raw) if res_raw else {}
+        
+        # 登録メンバーデータの読み込み
+        st.session_state.m_df = load_members()
+        st.session_state.detail_data_loaded = no
+
+    all_results = st.session_state.all_results
+    m_df = st.session_state.m_df
     cats = ["全体", "U8", "U9", "U10", "U11", "U12"]
 
     with st.container(border=True):
@@ -958,7 +1004,15 @@ elif st.session_state.selected_no is not None:
                             "result": res_val if res_val else "",
                             "memo": res_memo
                         }
+                        
+                        st.session_state.all_results = all_results
+
+                        client = get_gspread_client()
+                        sh = client.open_by_url(SPREADSHEET_URL)
+                        try: ws_res = sh.worksheet("results")
+                        except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
                         ws_res.update_acell("A2", json.dumps(all_results, ensure_ascii=False))
+                        
                         st.success(f"第 {i} 試合の結果を保存しました。")
                         sync_state_to_storage(); time.sleep(0.5); st.rerun()
 
@@ -1074,6 +1128,7 @@ else:
             elif cols.get("試合詳細") is True:
                 st.session_state.selected_no = int(filtered_df.iloc[row_idx]["No"])
                 st.session_state.page = "detail"
+                st.session_state.pop("detail_data_loaded", None)
             elif cols.get("写真管理") is True:
                 st.session_state.media_no = int(filtered_df.iloc[row_idx]["No"])
                 st.session_state.page = "photo"
