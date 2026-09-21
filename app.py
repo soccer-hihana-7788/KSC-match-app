@@ -106,7 +106,7 @@ st.markdown("""
 
     /* 余白の調整 */
     .block-container {
-        padding-top: 2rem;
+        padding-top: 1.5rem;
         padding-bottom: 3rem;
         max-width: 1400px;
     }
@@ -408,6 +408,55 @@ def load_data():
         df['写真管理'] = False
     return df
 
+# --- メンバー情報管理ヘルパー ---
+def load_members():
+    try:
+        client = get_gspread_client()
+        sh = client.open_by_url(SPREADSHEET_URL)
+        try:
+            ws = sh.worksheet("members")
+        except:
+            ws = sh.add_worksheet(title="members", rows="500", cols="2")
+            ws.append_row(["名前", "カテゴリー"])
+            return pd.DataFrame(columns=["名前", "カテゴリー"])
+        
+        all_values = ws.get_all_values()
+        if not all_values or len(all_values) < 2:
+            return pd.DataFrame(columns=["名前", "カテゴリー"])
+        
+        return pd.DataFrame(all_values[1:], columns=all_values[0])
+    except Exception:
+        return pd.DataFrame(columns=["名前", "カテゴリー"])
+
+def add_member(name, category):
+    try:
+        client = get_gspread_client()
+        sh = client.open_by_url(SPREADSHEET_URL)
+        try:
+            ws = sh.worksheet("members")
+        except:
+            ws = sh.add_worksheet(title="members", rows="500", cols="2")
+            ws.append_row(["名前", "カテゴリー"])
+        
+        ws.append_row([name, category])
+        return True
+    except Exception as e:
+        st.error(f"メンバー保存エラー: {e}")
+        return False
+
+def delete_member(name):
+    try:
+        client = get_gspread_client()
+        sh = client.open_by_url(SPREADSHEET_URL)
+        ws = sh.worksheet("members")
+        cell = ws.find(name)
+        if cell:
+            ws.delete_rows(cell.row)
+            return True
+    except Exception as e:
+        st.error(f"削除エラー: {e}")
+    return False
+
 if "initialized" in st.session_state and st.session_state.get("authenticated"):
     if "data_loaded_on_init" not in st.session_state:
         st.session_state.df_list = load_data()
@@ -474,6 +523,51 @@ def update_or_add_row(data_dict, target_no=None):
         except Exception as e:
             if attempt == 2: st.error(f"保存エラー: {e}"); return None
             time.sleep(1)
+
+# --- 得点データ集計ヘルパー ---
+def get_category_scorers_ranking(category_filter=None):
+    client = get_gspread_client()
+    sh = client.open_by_url(SPREADSHEET_URL)
+    try:
+        ws_res = sh.worksheet("results")
+        res_raw = ws_res.acell("A2").value
+        all_results = json.loads(res_raw) if res_raw else {}
+    except:
+        all_results = {}
+
+    df = st.session_state.df_list
+    if df is None or df.empty:
+        df = load_data()
+
+    no_to_cat = dict(zip(df["No"].astype(str), df["カテゴリー"]))
+
+    ranking = {}
+    total_goals = 0
+
+    for rk, data in all_results.items():
+        parts = rk.split("_")
+        if len(parts) >= 2:
+            match_no = parts[1]
+            cat = no_to_cat.get(str(match_no), "")
+            if category_filter and cat != category_filter:
+                continue
+            
+            scorers_dict = data.get("scorers_dict", {})
+            if scorers_dict:
+                for name, pts in scorers_dict.items():
+                    if int(pts) > 0:
+                        ranking[name] = ranking.get(name, 0) + int(pts)
+                        total_goals += int(pts)
+            else:
+                scorers_list = data.get("scorers", [])
+                for s in scorers_list:
+                    if isinstance(s, str) and s.strip():
+                        name = s.strip()
+                        ranking[name] = ranking.get(name, 0) + 1
+                        total_goals += 1
+
+    sorted_ranking = dict(sorted(ranking.items(), key=lambda x: x[1], reverse=True))
+    return sorted_ranking, total_goals
 
 # --- 4. 状態管理 ---
 AUTH_TIMEOUT_HOURS = 6
@@ -614,6 +708,15 @@ with st.sidebar:
         sync_state_to_storage()
         st.rerun()
 
+    # 「メンバー登録・一覧」リンクを新規追加
+    if st.button("👥 メンバー登録・一覧", use_container_width=True):
+        st.session_state.page = "members"
+        st.session_state.edit_no = None
+        st.session_state.media_no = None
+        st.session_state.selected_no = None
+        sync_state_to_storage()
+        st.rerun()
+
     # 一覧画面でのみ検索・絞り込みパネルを表示
     if is_main_dashboard:
         st.markdown("---")
@@ -629,8 +732,50 @@ with st.sidebar:
 # --- 6. 画面遷移（メイン領域） ---
 # ==========================================
 
+# 左上ポップアップ(注意書き)表示
+st.info("👈 **「メニューを開く」は画面左上のボタンをタップしてください（新規登録・メンバー管理・年度変更等が可能）**")
+
+# --- UI: メンバー登録・一覧ページ ---
+if st.session_state.page == "members":
+    st.markdown("<h2>👥 メンバー登録・一覧</h2>", unsafe_allow_html=True)
+    st.info("チームメンバーの登録と一覧管理が行えます。ここで登録したメンバーは試合の得点者入力時に選択できます。")
+
+    col_add, col_list = st.columns([1, 1])
+
+    with col_add:
+        with st.container(border=True):
+            st.markdown("#### ➕ 新規メンバー登録")
+            m_name = st.text_input("名前", placeholder="例: ひな")
+            m_cat = st.selectbox("カテゴリー", ["U8", "U9", "U10", "U11", "U12"])
+            st.write("")
+            if st.button("メンバーを保存", type="primary", use_container_width=True):
+                if m_name.strip():
+                    if add_member(m_name.strip(), m_cat):
+                        st.success(f"{m_name}（{m_cat}）を登録しました。")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.warning("名前を入力してください。")
+
+    with col_list:
+        with st.container(border=True):
+            st.markdown("#### 📋 登録済みメンバー一覧")
+            members_df = load_members()
+            if not members_df.empty:
+                st.dataframe(members_df, use_container_width=True, hide_index=True)
+                st.write("")
+                with st.expander("🗑️ メンバーの削除"):
+                    del_target = st.selectbox("削除するメンバーを選択", members_df["名前"].tolist())
+                    if st.button("選択したメンバーを削除"):
+                        if delete_member(del_target):
+                            st.success(f"{del_target} を削除しました。")
+                            time.sleep(1)
+                            st.rerun()
+            else:
+                st.write("登録されているメンバーはありません。")
+
 # --- UI: 新規登録・修正ページ ---
-if st.session_state.page == "create" or st.session_state.edit_no is not None:
+elif st.session_state.page == "create" or st.session_state.edit_no is not None:
     is_edit = st.session_state.edit_no is not None
     
     st.markdown(f"<h2>📝 試合情報の{'修正' if is_edit else '新規登録'}</h2>", unsafe_allow_html=True)
@@ -728,17 +873,28 @@ elif st.session_state.selected_no is not None:
     except: ws_res = sh.add_worksheet(title="results", rows="100", cols="2"); ws_res.append_row(["key", "data"])
     res_raw = ws_res.acell("A2").value; all_results = json.loads(res_raw) if res_raw else {}
     
+    # 登録メンバーデータの読み込み
+    m_df = load_members()
+    cats = ["全体", "U8", "U9", "U10", "U11", "U12"]
+
     with st.container(border=True):
         for i in range(1, 11):
-            rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": "", "scorers": [], "result": "", "memo": ""})
+            rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": "", "scorers": [], "scorers_dict": {}, "result": "", "memo": ""})
             c_res = curr.get("result", "")
             
             score_txt = curr.get("score", "").strip()
             h_txt = f"第 {i} 試合" + (f" （{c_res} {score_txt}）" if c_res or score_txt else "")
             
-            scorers_list = curr.get("scorers", [])
-            if scorers_list:
-                h_txt += f" ⚽ 得点者: {', '.join(scorers_list)}"
+            # 得点者のテキスト整形
+            curr_scorers_dict = curr.get("scorers_dict", {})
+            if not curr_scorers_dict and curr.get("scorers"):
+                for s in curr.get("scorers"):
+                    if isinstance(s, str) and s.strip():
+                        curr_scorers_dict[s.strip()] = curr_scorers_dict.get(s.strip(), 0) + 1
+
+            disp_scorers = [f"{k}({v}点)" if v > 1 else k for k, v in curr_scorers_dict.items() if v > 0]
+            if disp_scorers:
+                h_txt += f" ⚽ 得点者: {', '.join(disp_scorers)}"
             
             with st.expander(h_txt, expanded=(i==1)):
                 r_opts = ["勝ち", "負け", "引き分け"]
@@ -752,14 +908,53 @@ elif st.session_state.selected_no is not None:
                 with cl: nl = st.text_input("自チーム得点", value=l_v, key=f"l_{rk}")
                 with cr: nr = st.text_input("相手チーム得点", value=r_v, key=f"r_{rk}")
                 
-                sc_in = st.text_input("得点者 (カンマ区切り)", value=", ".join(curr.get("scorers",[])), key=f"txt_{rk}")
+                st.write("⚽ **得点者の選択と得点数管理**")
+                
+                # 得点数状態の保持
+                if f"scorers_map_{rk}" not in st.session_state:
+                    st.session_state[f"scorers_map_{rk}"] = curr_scorers_dict.copy()
+                
+                # タブによるメンバー選択と＋/－ボタンUI
+                tabs = st.tabs(cats)
+                for t_idx, cat_tab in enumerate(tabs):
+                    selected_cat = cats[t_idx]
+                    with cat_tab:
+                        if selected_cat == "全体":
+                            filtered_m = m_df
+                        else:
+                            filtered_m = m_df[m_df["カテゴリー"] == selected_cat] if not m_df.empty else pd.DataFrame()
+                        
+                        if not filtered_m.empty:
+                            m_list = filtered_m["名前"].tolist()
+                            for m_name in m_list:
+                                c_goals = st.session_state[f"scorers_map_{rk}"].get(m_name, 0)
+                                col_nm, col_m, col_val, col_p = st.columns([3, 1, 1, 1])
+                                with col_nm:
+                                    st.write(f"**{m_name}**")
+                                with col_m:
+                                    if st.button("➖", key=f"minus_{rk}_{selected_cat}_{m_name}"):
+                                        if c_goals > 0:
+                                            st.session_state[f"scorers_map_{rk}"][m_name] = c_goals - 1
+                                            st.rerun()
+                                with col_val:
+                                    st.write(f"**{c_goals} 点**")
+                                with col_p:
+                                    if st.button("➕", key=f"plus_{rk}_{selected_cat}_{m_name}"):
+                                        st.session_state[f"scorers_map_{rk}"][m_name] = c_goals + 1
+                                        st.rerun()
+                        else:
+                            st.write(f"※ {selected_cat} の登録メンバーはいません。「メンバー登録・一覧」から追加できます。")
+
                 res_memo = st.text_area("特記事項・メモ", value=curr.get("memo", ""), key=f"memo_{rk}")
                 
                 if st.button("保存する", key=f"btn_{rk}", type="primary"):
                     with st.spinner("保存中..."):
+                        final_map = {k: v for k, v in st.session_state[f"scorers_map_{rk}"].items() if v > 0}
+                        sc_list = [f"{k}({v}点)" if v > 1 else k for k, v in final_map.items()]
                         all_results[rk] = {
                             "score": f"{nl}-{nr}" if nl or nr else "", 
-                            "scorers": [s.strip() for s in sc_in.split(",") if s.strip()], 
+                            "scorers": sc_list,
+                            "scorers_dict": final_map,
                             "result": res_val if res_val else "",
                             "memo": res_memo
                         }
@@ -772,6 +967,20 @@ else:
     st.markdown(f"<h2>📊 KSC試合管理ダッシュボード</h2>", unsafe_allow_html=True)
     st.info("💡 **操作方法:** 「選択」チェックボックスを押すと編集・削除・コピーの操作ダイアログが開きます。「試合詳細」にチェックを入れると該当試合のスコア登録画面へ遷移します。")
 
+    # --- カテゴリー得点ランキングダイアログ ---
+    @st.dialog("🏆 カテゴリー別 得点ランキング＆総得点")
+    def show_ranking_dialog(cat_name):
+        ranking, total_goals = get_category_scorers_ranking(cat_name)
+        st.markdown(f"### ⚽ {cat_name} カテゴリー集計")
+        st.metric(f"{cat_name} 総得点数", f"{total_goals} 点")
+        st.markdown("---")
+        st.markdown("#### 🥇 得点者ランキング")
+        if ranking:
+            rank_data = [{"順位": f"第 {idx+1} 位", "選手名": name, "総得点数": f"{pts} 点"} for idx, (name, pts) in enumerate(ranking.items())]
+            st.dataframe(pd.DataFrame(rank_data), use_container_width=True, hide_index=True)
+        else:
+            st.info(f"{cat_name} の登録済み得点データはありません。")
+
     # サマリーダッシュボード
     if st.session_state.df_list is not None and not st.session_state.df_list.empty:
         summary_df = st.session_state.df_list
@@ -781,13 +990,20 @@ else:
         sc2.metric("⚽ サッカー", f"{len(summary_df[summary_df['競技分類'] == 'サッカー'])} 試合")
         sc3.metric("👟 フットサル", f"{len(summary_df[summary_df['競技分類'] == 'フットサル'])} 試合")
         
-        st.markdown("**カテゴリー別内訳**")
+        st.markdown("**カテゴリー別内訳（タップすると得点ランキングを表示）**")
         cc1, cc2, cc3, cc4, cc5 = st.columns(5)
-        cc1.metric("U8", f"{len(summary_df[summary_df['カテゴリー'] == 'U8'])} 試合")
-        cc2.metric("U9", f"{len(summary_df[summary_df['カテゴリー'] == 'U9'])} 試合")
-        cc3.metric("U10", f"{len(summary_df[summary_df['カテゴリー'] == 'U10'])} 試合")
-        cc4.metric("U11", f"{len(summary_df[summary_df['カテゴリー'] == 'U11'])} 試合")
-        cc5.metric("U12", f"{len(summary_df[summary_df['カテゴリー'] == 'U12'])} 試合")
+        
+        if cc1.button(f"U8 ({len(summary_df[summary_df['カテゴリー'] == 'U8'])}試合)", use_container_width=True):
+            show_ranking_dialog("U8")
+        if cc2.button(f"U9 ({len(summary_df[summary_df['カテゴリー'] == 'U9'])}試合)", use_container_width=True):
+            show_ranking_dialog("U9")
+        if cc3.button(f"U10 ({len(summary_df[summary_df['カテゴリー'] == 'U10'])}試合)", use_container_width=True):
+            show_ranking_dialog("U10")
+        if cc4.button(f"U11 ({len(summary_df[summary_df['カテゴリー'] == 'U11'])}試合)", use_container_width=True):
+            show_ranking_dialog("U11")
+        if cc5.button(f"U12 ({len(summary_df[summary_df['カテゴリー'] == 'U12'])}試合)", use_container_width=True):
+            show_ranking_dialog("U12")
+            
         st.markdown("---")
 
     # --- アクション用ポップアップダイアログの定義 ---
