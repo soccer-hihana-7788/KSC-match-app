@@ -539,6 +539,57 @@ def update_or_add_row(data_dict, target_no=None):
             time.sleep(1)
 
 # --- 得点データ集計ヘルパー ---
+def clean_scorers_data(scorers_dict, scorers_list):
+    """
+    過去の履歴データに混入しているカンマ区切りや「名前2」などの表記を
+    正しいメンバー名と得点の辞書にクレンジングする関数。
+    """
+    cleaned = {}
+    items_to_process = []
+    
+    if scorers_dict:
+        for k, v in scorers_dict.items():
+            try:
+                val = int(v)
+            except:
+                val = 1
+            items_to_process.append((str(k), val))
+    
+    if scorers_list:
+        for s in scorers_list:
+            if isinstance(s, str):
+                items_to_process.append((s, 1))
+
+    for text_val, base_pts in items_to_process:
+        parts = re.split(r'[、,，・\s]+', text_val.strip())
+        for part in parts:
+            part = part.strip()
+            if not part: continue
+            
+            m_paren = re.search(r'^(.*?)\s*\(([0-9０-９]+)点?\)$', part)
+            if m_paren:
+                name = m_paren.group(1).strip()
+                pts = int(m_paren.group(2))
+            else:
+                m_num = re.search(r'^(.*?)\s*([0-9０-９]+)$', part)
+                if m_num:
+                    name = m_num.group(1).strip()
+                    if name:
+                        num_str = m_num.group(2).translate(str.maketrans('０１２３４５６７８９', '0123456789'))
+                        pts = int(num_str)
+                    else:
+                        name = part
+                        pts = base_pts
+                else:
+                    name = part
+                    pts = 1 if base_pts <= 1 else base_pts
+            
+            if name:
+                name = name.replace(" ", "").replace(" ", "")
+                cleaned[name] = cleaned.get(name, 0) + pts
+
+    return cleaned
+
 def get_category_scorers_ranking(category_filter=None):
     client = get_gspread_client()
     sh = client.open_by_url(SPREADSHEET_URL)
@@ -566,27 +617,12 @@ def get_category_scorers_ranking(category_filter=None):
             if category_filter and cat != category_filter:
                 continue
             
-            scorers_dict = data.get("scorers_dict", {})
-            if scorers_dict:
-                for name, pts in scorers_dict.items():
-                    if int(pts) > 0:
-                        ranking[name] = ranking.get(name, 0) + int(pts)
-                        total_goals += int(pts)
-            else:
-                scorers_list = data.get("scorers", [])
-                for s in scorers_list:
-                    if isinstance(s, str) and s.strip():
-                        s_str = s.strip()
-                        match = re.search(r'^(.*?)\s*([0-9０-９]+)\s*$', s_str)
-                        if match:
-                            name = match.group(1).strip()
-                            pts = int(match.group(2))
-                            ranking[name] = ranking.get(name, 0) + pts
-                            total_goals += pts
-                        else:
-                            name = s_str
-                            ranking[name] = ranking.get(name, 0) + 1
-                            total_goals += 1
+            cleaned_dict = clean_scorers_data(data.get("scorers_dict", {}), data.get("scorers", []))
+            
+            for name, pts in cleaned_dict.items():
+                if pts > 0:
+                    ranking[name] = ranking.get(name, 0) + pts
+                    total_goals += pts
 
     sorted_ranking = dict(sorted(ranking.items(), key=lambda x: x[1], reverse=True))
     return sorted_ranking, total_goals
@@ -941,19 +977,7 @@ elif st.session_state.selected_no is not None:
             h_txt = f"第 {i} 試合" + (f" （{c_res} {score_txt}）" if c_res or score_txt else "")
             
             # 得点者のテキスト整形
-            curr_scorers_dict = curr.get("scorers_dict", {})
-            if not curr_scorers_dict and curr.get("scorers"):
-                for s in curr.get("scorers"):
-                    if isinstance(s, str) and s.strip():
-                        s_str = s.strip()
-                        match = re.search(r'^(.*?)\s*([0-9０-９]+)\s*$', s_str)
-                        if match:
-                            name = match.group(1).strip()
-                            pts = int(match.group(2))
-                            curr_scorers_dict[name] = curr_scorers_dict.get(name, 0) + pts
-                        else:
-                            name = s_str
-                            curr_scorers_dict[name] = curr_scorers_dict.get(name, 0) + 1
+            curr_scorers_dict = clean_scorers_data(curr.get("scorers_dict", {}), curr.get("scorers", []))
 
             disp_scorers = [f"{k}({v}点)" if v > 1 else k for k, v in curr_scorers_dict.items() if v > 0]
             if disp_scorers:
