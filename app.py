@@ -35,7 +35,8 @@ st.markdown("""
 
     /* 左上メニュー（サイドバー）を開くボタンの装飾と「メニューを開く」文字追加 */
     [data-testid="stSidebarCollapsedControl"],
-    header [data-testid="stSidebarCollapsedControl"] {
+    header [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"] {
         display: inline-flex !important;
         align-items: center !important;
         width: auto !important;
@@ -50,7 +51,8 @@ st.markdown("""
     }
 
     [data-testid="stSidebarCollapsedControl"]::after,
-    header [data-testid="stSidebarCollapsedControl"]::after {
+    header [data-testid="stSidebarCollapsedControl"]::after,
+    [data-testid="collapsedControl"]::after {
         content: " メニューを開く" !important;
         font-size: 14px !important;
         font-weight: bold !important;
@@ -87,6 +89,7 @@ st.markdown("""
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="stSidebarCollapsedControl"] svg,
     header [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="collapsedControl"] svg,
     button[aria-label*="sidebar"] svg {
         fill: #333333 !important;
         color: #333333 !important;
@@ -96,6 +99,7 @@ st.markdown("""
     }
 
     [data-testid="stSidebarCollapsedControl"]:hover,
+    [data-testid="collapsedControl"]:hover,
     [data-testid="stSidebarCollapseButton"]:hover {
         background-color: #FFEDD5 !important;
     }
