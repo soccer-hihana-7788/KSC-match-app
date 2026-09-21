@@ -10,6 +10,7 @@ from io import BytesIO
 from PIL import Image, ImageOps
 import streamlit.components.v1 as components
 import time
+import re
 
 # --- 1. ページ設定 ---
 st.set_page_config(page_title="KSC試合管理ツール", layout="wide")
@@ -575,9 +576,17 @@ def get_category_scorers_ranking(category_filter=None):
                 scorers_list = data.get("scorers", [])
                 for s in scorers_list:
                     if isinstance(s, str) and s.strip():
-                        name = s.strip()
-                        ranking[name] = ranking.get(name, 0) + 1
-                        total_goals += 1
+                        s_str = s.strip()
+                        match = re.search(r'^(.*?)\s*([0-9０-９]+)\s*$', s_str)
+                        if match:
+                            name = match.group(1).strip()
+                            pts = int(match.group(2))
+                            ranking[name] = ranking.get(name, 0) + pts
+                            total_goals += pts
+                        else:
+                            name = s_str
+                            ranking[name] = ranking.get(name, 0) + 1
+                            total_goals += 1
 
     sorted_ranking = dict(sorted(ranking.items(), key=lambda x: x[1], reverse=True))
     return sorted_ranking, total_goals
@@ -785,11 +794,11 @@ if st.session_state.page == "members":
                     edit_target = st.selectbox("修正するメンバーを選択", members_df["名前"].tolist(), key="edit_sel")
                     if edit_target:
                         target_row = members_df[members_df["名前"] == edit_target].iloc[0]
-                        new_name = st.text_input("新しい名前", value=target_row["名前"], key="edit_name")
+                        new_name = st.text_input("新しい名前", value=target_row["名前"], key=f"edit_name_{edit_target}")
                         cats = ["U8", "U9", "U10", "U11", "U12"]
                         current_cat = target_row["カテゴリー"]
                         idx = cats.index(current_cat) if current_cat in cats else 4
-                        new_cat = st.selectbox("新しいカテゴリー", cats, index=idx, key="edit_cat")
+                        new_cat = st.selectbox("新しいカテゴリー", cats, index=idx, key=f"edit_cat_{edit_target}")
                         
                         if st.button("選択したメンバーを修正"):
                             if new_name.strip():
@@ -936,7 +945,15 @@ elif st.session_state.selected_no is not None:
             if not curr_scorers_dict and curr.get("scorers"):
                 for s in curr.get("scorers"):
                     if isinstance(s, str) and s.strip():
-                        curr_scorers_dict[s.strip()] = curr_scorers_dict.get(s.strip(), 0) + 1
+                        s_str = s.strip()
+                        match = re.search(r'^(.*?)\s*([0-9０-９]+)\s*$', s_str)
+                        if match:
+                            name = match.group(1).strip()
+                            pts = int(match.group(2))
+                            curr_scorers_dict[name] = curr_scorers_dict.get(name, 0) + pts
+                        else:
+                            name = s_str
+                            curr_scorers_dict[name] = curr_scorers_dict.get(name, 0) + 1
 
             disp_scorers = [f"{k}({v}点)" if v > 1 else k for k, v in curr_scorers_dict.items() if v > 0]
             if disp_scorers:
