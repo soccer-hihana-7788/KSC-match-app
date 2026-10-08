@@ -1065,17 +1065,24 @@ elif st.session_state.selected_no is not None:
                         cat_member_names = cat_m_df["名前"].tolist() if not cat_m_df.empty else []
                         available_cat_members = ["(メンバーを選択して追加)"] + [m for m in cat_member_names if st.session_state[f"scorers_map_{rk}"].get(m, 0) == 0]
                         
-                        selected_new = st.selectbox(
+                        sel_key = f"sel_{rk}_{selected_cat}"
+
+                        def make_add_scorer_callback(target_rk, target_key):
+                            def callback():
+                                sel_val = st.session_state.get(target_key)
+                                if sel_val and sel_val != "(メンバーを選択して追加)":
+                                    new_map = dict(st.session_state[f"scorers_map_{target_rk}"])
+                                    new_map[sel_val] = 1
+                                    st.session_state[f"scorers_map_{target_rk}"] = new_map
+                                    st.session_state[target_key] = "(メンバーを選択して追加)"
+                            return callback
+
+                        st.selectbox(
                             f"得点者を選択（{selected_cat}）", 
                             available_cat_members, 
-                            key=f"sel_{rk}_{selected_cat}"
+                            key=sel_key,
+                            on_change=make_add_scorer_callback(rk, sel_key)
                         )
-                        if selected_new != "(メンバーを選択して追加)":
-                            new_map = dict(st.session_state[f"scorers_map_{rk}"])
-                            new_map[selected_new] = 1
-                            st.session_state[f"scorers_map_{rk}"] = new_map
-                            st.session_state[f"sel_{rk}_{selected_cat}"] = "(メンバーを選択して追加)"
-                            st.rerun()
 
                 res_memo = st.text_area("特記事項・メモ", value=curr.get("memo", ""), key=f"memo_{rk}")
                 
