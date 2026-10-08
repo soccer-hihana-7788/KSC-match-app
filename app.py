@@ -967,12 +967,18 @@ elif st.session_state.selected_no is not None:
     all_results = st.session_state.all_results
     m_df = st.session_state.m_df
 
+    # 各試合の得点データ状態を初期化（セッション未設定時）
+    for i in range(1, 11):
+        rk = f"res_{no}_{i}"
+        if f"scorers_map_{rk}" not in st.session_state:
+            curr = all_results.get(rk, {})
+            st.session_state[f"scorers_map_{rk}"] = clean_scorers_data(curr.get("scorers_dict", {}), curr.get("scorers", []))
+
     # --- この試合（1日分全体）の得点ランキング集計・表示 ---
     match_ranking = {}
     for i in range(1, 11):
         rk = f"res_{no}_{i}"
-        curr = all_results.get(rk, {})
-        c_dict = clean_scorers_data(curr.get("scorers_dict", {}), curr.get("scorers", []))
+        c_dict = st.session_state.get(f"scorers_map_{rk}", {})
         for name, pts in c_dict.items():
             if pts > 0:
                 match_ranking[name] = match_ranking.get(name, 0) + pts
@@ -984,16 +990,19 @@ elif st.session_state.selected_no is not None:
         st.dataframe(pd.DataFrame(rank_data), use_container_width=True, hide_index=True)
         st.write("")
 
+    cats = ["全体", "U8", "U9", "U10", "U11", "U12"]
+
     with st.container(border=True):
         for i in range(1, 11):
-            rk = f"res_{no}_{i}"; curr = all_results.get(rk, {"score": "", "scorers": [], "scorers_dict": {}, "result": "", "memo": ""})
+            rk = f"res_{no}_{i}"
+            curr = all_results.get(rk, {"score": "", "scorers": [], "scorers_dict": {}, "result": "", "memo": ""})
             c_res = curr.get("result", "")
             
             score_txt = curr.get("score", "").strip()
             h_txt = f"第 {i} 試合" + (f" （{c_res} {score_txt}）" if c_res or score_txt else "")
             
             # 得点者のテキスト整形
-            curr_scorers_dict = clean_scorers_data(curr.get("scorers_dict", {}), curr.get("scorers", []))
+            curr_scorers_dict = st.session_state.get(f"scorers_map_{rk}", {})
 
             disp_scorers = [f"{k}({v}点)" if v > 1 else k for k, v in curr_scorers_dict.items() if v > 0]
             if disp_scorers:
@@ -1013,15 +1022,11 @@ elif st.session_state.selected_no is not None:
                 
                 st.write("⚽ **得点者の選択と得点数管理**")
                 
-                # 得点数状態の保持
-                if f"scorers_map_{rk}" not in st.session_state:
-                    st.session_state[f"scorers_map_{rk}"] = curr_scorers_dict.copy()
-                
-                # 既に選択されているメンバーと＋ーボタン
+                # 既に選択されているメンバーと＋・ー・削除ボタン
                 active_scorers = [m for m, pts in st.session_state[f"scorers_map_{rk}"].items() if pts > 0]
                 for m_name in active_scorers:
                     c_goals = st.session_state[f"scorers_map_{rk}"].get(m_name, 0)
-                    col_nm, col_m, col_val, col_p = st.columns([3, 1, 1, 1])
+                    col_nm, col_m, col_val, col_p, col_del = st.columns([3, 1, 1, 1, 1])
                     with col_nm:
                         st.write(f"**{m_name}**")
                     with col_m:
@@ -1035,16 +1040,34 @@ elif st.session_state.selected_no is not None:
                         if st.button("➕", key=f"plus_{rk}_{m_name}"):
                             st.session_state[f"scorers_map_{rk}"][m_name] = c_goals + 1
                             st.rerun()
+                    with col_del:
+                        if st.button("🗑️ 削除", key=f"del_scorer_{rk}_{m_name}"):
+                            st.session_state[f"scorers_map_{rk}"][m_name] = 0
+                            st.rerun()
 
-                # 新規得点者の追加用セレクトボックス（追加後すぐに空に戻る）
-                all_member_names = m_df["名前"].tolist() if not m_df.empty else []
-                available_members = ["(メンバーを選択して追加)"] + [m for m in all_member_names if st.session_state[f"scorers_map_{rk}"].get(m, 0) == 0]
-                
-                selected_new = st.selectbox("➕ 新たな得点者を選択", available_members, key=f"sel_{rk}")
-                if selected_new != "(メンバーを選択して追加)":
-                    st.session_state[f"scorers_map_{rk}"][selected_new] = 1
-                    del st.session_state[f"sel_{rk}"]
-                    st.rerun()
+                # 得点者追加用のカテゴリー別タブ
+                st.write("➕ **新たな得点者を選択・追加**")
+                tabs = st.tabs(cats)
+                for t_idx, cat_tab in enumerate(tabs):
+                    selected_cat = cats[t_idx]
+                    with cat_tab:
+                        if selected_cat == "全体":
+                            cat_m_df = m_df
+                        else:
+                            cat_m_df = m_df[m_df["カテゴリー"] == selected_cat] if not m_df.empty else pd.DataFrame()
+                        
+                        cat_member_names = cat_m_df["名前"].tolist() if not cat_m_df.empty else []
+                        available_cat_members = ["(メンバーを選択して追加)"] + [m for m in cat_member_names if st.session_state[f"scorers_map_{rk}"].get(m, 0) == 0]
+                        
+                        selected_new = st.selectbox(
+                            f"得点者を選択（{selected_cat}）", 
+                            available_cat_members, 
+                            key=f"sel_{rk}_{selected_cat}"
+                        )
+                        if selected_new != "(メンバーを選択して追加)":
+                            st.session_state[f"scorers_map_{rk}"][selected_new] = 1
+                            del st.session_state[f"sel_{rk}_{selected_cat}"]
+                            st.rerun()
 
                 res_memo = st.text_area("特記事項・メモ", value=curr.get("memo", ""), key=f"memo_{rk}")
                 
