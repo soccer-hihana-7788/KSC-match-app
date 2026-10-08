@@ -1032,17 +1032,23 @@ elif st.session_state.selected_no is not None:
                     with col_m:
                         if st.button("➖", key=f"minus_{rk}_{m_name}"):
                             if c_goals > 0:
-                                st.session_state[f"scorers_map_{rk}"][m_name] = c_goals - 1
+                                new_map = dict(st.session_state[f"scorers_map_{rk}"])
+                                new_map[m_name] = c_goals - 1
+                                st.session_state[f"scorers_map_{rk}"] = new_map
                                 st.rerun()
                     with col_val:
                         st.write(f"**{c_goals} 点**")
                     with col_p:
                         if st.button("➕", key=f"plus_{rk}_{m_name}"):
-                            st.session_state[f"scorers_map_{rk}"][m_name] = c_goals + 1
+                            new_map = dict(st.session_state[f"scorers_map_{rk}"])
+                            new_map[m_name] = c_goals + 1
+                            st.session_state[f"scorers_map_{rk}"] = new_map
                             st.rerun()
                     with col_del:
                         if st.button("🗑️ 削除", key=f"del_scorer_{rk}_{m_name}"):
-                            st.session_state[f"scorers_map_{rk}"][m_name] = 0
+                            new_map = dict(st.session_state[f"scorers_map_{rk}"])
+                            new_map[m_name] = 0
+                            st.session_state[f"scorers_map_{rk}"] = new_map
                             st.rerun()
 
                 # 得点者追加用のカテゴリー別タブ
@@ -1065,8 +1071,10 @@ elif st.session_state.selected_no is not None:
                             key=f"sel_{rk}_{selected_cat}"
                         )
                         if selected_new != "(メンバーを選択して追加)":
-                            st.session_state[f"scorers_map_{rk}"][selected_new] = 1
-                            del st.session_state[f"sel_{rk}_{selected_cat}"]
+                            new_map = dict(st.session_state[f"scorers_map_{rk}"])
+                            new_map[selected_new] = 1
+                            st.session_state[f"scorers_map_{rk}"] = new_map
+                            st.session_state[f"sel_{rk}_{selected_cat}"] = "(メンバーを選択して追加)"
                             st.rerun()
 
                 res_memo = st.text_area("特記事項・メモ", value=curr.get("memo", ""), key=f"memo_{rk}")
