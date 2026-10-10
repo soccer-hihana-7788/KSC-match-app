@@ -543,18 +543,26 @@ def clean_scorers_data(scorers_dict, scorers_list):
     """
     過去の履歴データに混入しているカンマ区切りや「名前2」などの表記を
     正しいメンバー名と得点の辞書にクレンジングする関数。
+    scorers_dictがある場合はそれを優先し、二重カウントを防ぐ。
     """
     cleaned = {}
-    items_to_process = []
     
-    if scorers_dict:
+    # scorers_dictが有効なデータを持つ場合は、それのみを信頼して使用する（二重カウント防止）
+    if scorers_dict and isinstance(scorers_dict, dict) and len(scorers_dict) > 0:
         for k, v in scorers_dict.items():
+            name = str(k).strip()
+            if not name:
+                continue
             try:
                 val = int(v)
             except:
                 val = 1
-            items_to_process.append((str(k), val))
-    
+            if val > 0:
+                cleaned[name] = cleaned.get(name, 0) + val
+        return cleaned
+
+    # scorers_dictがない、または空の場合のみ scorers_list を処理する
+    items_to_process = []
     if scorers_list:
         for s in scorers_list:
             if isinstance(s, str):
@@ -1008,7 +1016,9 @@ elif st.session_state.selected_no is not None:
             if disp_scorers:
                 h_txt += f" ⚽ 得点者: {', '.join(disp_scorers)}"
             
-            with st.expander(h_txt, expanded=(i==1)):
+            # 操作中の試合のエクスパンダーを維持する
+            is_expanded = (i == 1) or (st.session_state.get("active_rk") == rk)
+            with st.expander(h_txt, expanded=is_expanded):
                 r_opts = ["勝ち", "負け", "引き分け"]
                 r_idx = r_opts.index(c_res) if c_res in r_opts else None
                 res_val = st.radio("試合結果", r_opts, index=r_idx, key=f"rad_{rk}", horizontal=True)
@@ -1031,6 +1041,7 @@ elif st.session_state.selected_no is not None:
                         st.write(f"**{m_name}**")
                     with col_m:
                         if st.button("➖", key=f"minus_{rk}_{m_name}"):
+                            st.session_state["active_rk"] = rk
                             if c_goals > 0:
                                 new_map = dict(st.session_state[f"scorers_map_{rk}"])
                                 new_map[m_name] = c_goals - 1
@@ -1040,12 +1051,14 @@ elif st.session_state.selected_no is not None:
                         st.write(f"**{c_goals} 点**")
                     with col_p:
                         if st.button("➕", key=f"plus_{rk}_{m_name}"):
+                            st.session_state["active_rk"] = rk
                             new_map = dict(st.session_state[f"scorers_map_{rk}"])
                             new_map[m_name] = c_goals + 1
                             st.session_state[f"scorers_map_{rk}"] = new_map
                             st.rerun()
                     with col_del:
                         if st.button("🗑️ 削除", key=f"del_scorer_{rk}_{m_name}"):
+                            st.session_state["active_rk"] = rk
                             new_map = dict(st.session_state[f"scorers_map_{rk}"])
                             new_map[m_name] = 0
                             st.session_state[f"scorers_map_{rk}"] = new_map
@@ -1069,6 +1082,7 @@ elif st.session_state.selected_no is not None:
 
                         def make_add_scorer_callback(target_rk, target_key):
                             def callback():
+                                st.session_state["active_rk"] = target_rk
                                 sel_val = st.session_state.get(target_key)
                                 if sel_val and sel_val != "(メンバーを選択して追加)":
                                     new_map = dict(st.session_state[f"scorers_map_{target_rk}"])
@@ -1087,6 +1101,7 @@ elif st.session_state.selected_no is not None:
                 res_memo = st.text_area("特記事項・メモ", value=curr.get("memo", ""), key=f"memo_{rk}")
                 
                 if st.button("保存する", key=f"btn_{rk}", type="primary"):
+                    st.session_state["active_rk"] = rk
                     with st.spinner("保存中..."):
                         final_map = {k: v for k, v in st.session_state[f"scorers_map_{rk}"].items() if v > 0}
                         sc_list = [f"{k}({v}点)" if v > 1 else k for k, v in final_map.items()]
